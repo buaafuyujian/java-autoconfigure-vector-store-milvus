@@ -57,7 +57,7 @@ class MilvusVectorStoreTests {
                 .varchar("content", 65535)
                 .floatVector("embedding", DIMENSION)
                 .json("metadata")
-                .enableDynamicField(true)
+                .enableDynamicField(false)  // 设为 false 避免生成 $meta 字段
                 .build();
 
         // 创建索引
