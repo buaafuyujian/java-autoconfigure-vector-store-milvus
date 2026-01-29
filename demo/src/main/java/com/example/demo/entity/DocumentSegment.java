@@ -4,11 +4,12 @@ import com.fyj.rag.schema.CollectionSchema;
 import com.fyj.rag.schema.FieldSchema;
 import com.fyj.rag.schema.IndexSchema;
 import com.fyj.rag.vectorstore.Document;
+import com.google.gson.JsonObject;
 import io.milvus.v2.common.IndexParam;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.experimental.SuperBuilder;
 
 import java.util.HashMap;
 import java.util.List;
@@ -17,18 +18,14 @@ import java.util.Map;
 /**
  * 文档片段实体
  * <p>
+ * 继承自 Document，可直接用于 MilvusVectorStore 操作
  * 对应 Milvus Collection: document_segments
  */
 @Data
-@Builder
+@SuperBuilder
 @NoArgsConstructor
-@AllArgsConstructor
-public class DocumentSegment {
-
-    /**
-     * 片段唯一标识（主键）
-     */
-    private String id;
+@EqualsAndHashCode(callSuper = true)
+public class DocumentSegment extends Document {
 
     /**
      * 所属知识库ID
@@ -39,22 +36,6 @@ public class DocumentSegment {
      * 所属文档ID
      */
     private String fileId;
-
-    /**
-     * 片段原始内容
-     */
-    private String content;
-
-    /**
-     * 向量化后的内容
-     */
-    private List<Float> embedding;
-
-    /**
-     * 元数据（可存储：chunk_index, total_chunks, create_time 等）
-     */
-    @Builder.Default
-    private Map<String, Object> metadata = new HashMap<>();
 
     // ==================== Collection 配置常量 ====================
 
@@ -77,6 +58,35 @@ public class DocumentSegment {
      * 默认向量维度（OpenAI text-embedding-ada-002 为 1536）
      */
     public static final int DEFAULT_DIMENSION = 1536;
+
+    // ==================== 构造方法 ====================
+
+    public DocumentSegment(String id, String knowledgeId, String fileId, String content,
+                           List<Float> embedding, Map<String, Object> metadata) {
+        super(id, content, embedding, metadata != null ? metadata : new HashMap<>());
+        this.knowledgeId = knowledgeId;
+        this.fileId = fileId;
+    }
+
+    // ==================== 覆盖 toJsonObject 方法 ====================
+
+    /**
+     * 转换为 JsonObject，添加 knowledgeId 和 fileId 字段
+     */
+    @Override
+    public JsonObject toJsonObject(String idField, String contentField, String embeddingField, String metadataField) {
+        JsonObject json = super.toJsonObject(idField, contentField, embeddingField, metadataField);
+
+        // 添加额外字段
+        if (this.knowledgeId != null) {
+            json.addProperty(FIELD_KNOWLEDGE_ID, this.knowledgeId);
+        }
+        if (this.fileId != null) {
+            json.addProperty(FIELD_FILE_ID, this.fileId);
+        }
+
+        return json;
+    }
 
     // ==================== Schema 创建方法 ====================
 
@@ -124,65 +134,52 @@ public class DocumentSegment {
         return IndexSchema.ivfFlat(FIELD_EMBEDDING, IndexParam.MetricType.COSINE, nlist);
     }
 
-    // ==================== 转换方法 ====================
+    // ==================== 静态工厂方法 ====================
 
     /**
-     * 转换为通用 Document 对象（用于 MilvusVectorStore 操作）
+     * 创建文档片段
      */
-    public Document toDocument() {
-        Map<String, Object> meta = new HashMap<>(metadata != null ? metadata : new HashMap<>());
-        meta.put(FIELD_KNOWLEDGE_ID, knowledgeId);
-        meta.put(FIELD_FILE_ID, fileId);
-
-        return Document.builder()
-                .id(id)
-                .content(content)
-                .embedding(embedding)
-                .metadata(meta)
-                .build();
+    public static DocumentSegment of(String id, String knowledgeId, String fileId,
+                                     String content, List<Float> embedding) {
+        return new DocumentSegment(id, knowledgeId, fileId, content, embedding, new HashMap<>());
     }
 
     /**
-     * 从通用 Document 对象转换
+     * 创建文档片段（带元数据）
+     */
+    public static DocumentSegment of(String id, String knowledgeId, String fileId,
+                                     String content, List<Float> embedding, Map<String, Object> metadata) {
+        return new DocumentSegment(id, knowledgeId, fileId, content, embedding, metadata);
+    }
+
+    /**
+     * 从 Document 转换（需要从 metadata 中提取 knowledgeId 和 fileId）
      */
     public static DocumentSegment fromDocument(Document document) {
         Map<String, Object> meta = document.getMetadata();
-
-        DocumentSegmentBuilder builder = DocumentSegment.builder()
-                .id(document.getId())
-                .content(document.getContent())
-                .embedding(document.getEmbedding());
+        String knowledgeId = null;
+        String fileId = null;
 
         if (meta != null) {
             if (meta.containsKey(FIELD_KNOWLEDGE_ID)) {
-                builder.knowledgeId(String.valueOf(meta.get(FIELD_KNOWLEDGE_ID)));
+                knowledgeId = String.valueOf(meta.get(FIELD_KNOWLEDGE_ID));
             }
             if (meta.containsKey(FIELD_FILE_ID)) {
-                builder.fileId(String.valueOf(meta.get(FIELD_FILE_ID)));
+                fileId = String.valueOf(meta.get(FIELD_FILE_ID));
             }
-
-            // 移除已提取的字段，剩余作为 metadata
-            Map<String, Object> remaining = new HashMap<>(meta);
-            remaining.remove(FIELD_KNOWLEDGE_ID);
-            remaining.remove(FIELD_FILE_ID);
-            builder.metadata(remaining);
         }
 
-        return builder.build();
+        return new DocumentSegment(
+                document.getId(),
+                knowledgeId,
+                fileId,
+                document.getContent(),
+                document.getEmbedding(),
+                meta
+        );
     }
 
-    // ==================== 辅助方法 ====================
-
-    /**
-     * 添加元数据
-     */
-    public DocumentSegment addMetadata(String key, Object value) {
-        if (this.metadata == null) {
-            this.metadata = new HashMap<>();
-        }
-        this.metadata.put(key, value);
-        return this;
-    }
+    // ==================== 过滤表达式构建方法 ====================
 
     /**
      * 构建按知识库ID过滤的表达式
@@ -204,6 +201,24 @@ public class DocumentSegment {
     public static String filterByKnowledgeIdAndFileId(String knowledgeId, String fileId) {
         return String.format("%s == \"%s\" && %s == \"%s\"",
                 FIELD_KNOWLEDGE_ID, knowledgeId, FIELD_FILE_ID, fileId);
+    }
+
+    /**
+     * 构建按多个知识库ID过滤的表达式（用于跨知识库搜索）
+     */
+    public static String filterByKnowledgeIds(List<String> knowledgeIds) {
+        return String.format("%s in [\"%s\"]",
+                FIELD_KNOWLEDGE_ID,
+                String.join("\", \"", knowledgeIds));
+    }
+
+    /**
+     * 构建按多个文档ID过滤的表达式
+     */
+    public static String filterByFileIds(List<String> fileIds) {
+        return String.format("%s in [\"%s\"]",
+                FIELD_FILE_ID,
+                String.join("\", \"", fileIds));
     }
 }
 

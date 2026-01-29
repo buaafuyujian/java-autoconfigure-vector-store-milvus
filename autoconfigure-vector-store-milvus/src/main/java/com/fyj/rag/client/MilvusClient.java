@@ -309,6 +309,22 @@ public class MilvusClient implements Closeable {
                         idFieldName, contentFieldName, embeddingFieldName, metadataFieldName));
     }
 
+    /**
+     * 获取 VectorStore 实例（自定义字段名 + 额外输出字段）
+     */
+    public MilvusVectorStore getVectorStore(String collectionName,
+                                            String idFieldName,
+                                            String contentFieldName,
+                                            String embeddingFieldName,
+                                            String metadataFieldName,
+                                            List<String> extraOutputFields) {
+        String cacheKey = collectionName + "_" + idFieldName + "_" + contentFieldName
+                + "_" + embeddingFieldName + "_" + metadataFieldName + "_" + String.join(",", extraOutputFields);
+        return vectorStoreCache.computeIfAbsent(cacheKey,
+                name -> new DefaultMilvusVectorStore(client, collectionName,
+                        idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, extraOutputFields));
+    }
+
     // ==================== 原始客户端 ====================
 
     /**

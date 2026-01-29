@@ -28,23 +28,36 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     private final String embeddingFieldName;
     private final String metadataFieldName;
     private final List<String> outputFields;
+    private final List<String> extraOutputFields;
 
     private static final Gson GSON = new Gson();
 
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName) {
-        this(client, collectionName, "id", "content", "embedding", "metadata");
+        this(client, collectionName, "id", "content", "embedding", "metadata", Collections.emptyList());
     }
 
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
                                     String idFieldName, String contentFieldName,
                                     String embeddingFieldName, String metadataFieldName) {
+        this(client, collectionName, idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, Collections.emptyList());
+    }
+
+    public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
+                                    String idFieldName, String contentFieldName,
+                                    String embeddingFieldName, String metadataFieldName,
+                                    List<String> extraOutputFields) {
         this.client = client;
         this.collectionName = collectionName;
         this.idFieldName = idFieldName;
         this.contentFieldName = contentFieldName;
         this.embeddingFieldName = embeddingFieldName;
         this.metadataFieldName = metadataFieldName;
-        this.outputFields = Arrays.asList(idFieldName, contentFieldName, metadataFieldName);
+        this.extraOutputFields = extraOutputFields != null ? extraOutputFields : Collections.emptyList();
+
+        // 构建输出字段列表
+        List<String> fields = new ArrayList<>(Arrays.asList(idFieldName, contentFieldName, metadataFieldName));
+        fields.addAll(this.extraOutputFields);
+        this.outputFields = fields;
     }
 
     // ==================== Collection 信息 ====================
@@ -502,22 +515,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     // ==================== 辅助方法 ====================
 
     private JsonObject documentToJsonObject(Document document) {
-        JsonObject json = new JsonObject();
-        json.addProperty(idFieldName, document.getId());
-
-        if (document.getContent() != null) {
-            json.addProperty(contentFieldName, document.getContent());
-        }
-
-        if (document.getEmbedding() != null) {
-            json.add(embeddingFieldName, GSON.toJsonTree(document.getEmbedding()));
-        }
-
-        if (document.getMetadata() != null && !document.getMetadata().isEmpty()) {
-            json.add(metadataFieldName, GSON.toJsonTree(document.getMetadata()));
-        }
-
-        return json;
+        return document.toJsonObject(idFieldName, contentFieldName, embeddingFieldName, metadataFieldName);
     }
 
     private Document resultToDocument(QueryResp.QueryResult result) {
@@ -537,7 +535,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
     @SuppressWarnings("unchecked")
     private Document entityToDocument(Map<String, Object> entity) {
-        Document.DocumentBuilder builder = Document.builder();
+        Document.DocumentBuilder<?, ?> builder = Document.builder();
 
         Object id = entity.get(idFieldName);
         if (id != null) {
@@ -554,17 +552,31 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
             builder.embedding((List<Float>) embedding);
         }
 
-        Object metadata = entity.get(metadataFieldName);
-        if (metadata instanceof Map) {
-            builder.metadata((Map<String, Object>) metadata);
-        } else if (metadata instanceof String) {
+        // 处理 metadata
+        Map<String, Object> metadata = new HashMap<>();
+        Object metadataObj = entity.get(metadataFieldName);
+        if (metadataObj instanceof Map) {
+            metadata.putAll((Map<String, Object>) metadataObj);
+        } else if (metadataObj instanceof String) {
             try {
-                Map<String, Object> metadataMap = GSON.fromJson((String) metadata, Map.class);
-                builder.metadata(metadataMap);
+                Map<String, Object> metadataMap = GSON.fromJson((String) metadataObj, Map.class);
+                if (metadataMap != null) {
+                    metadata.putAll(metadataMap);
+                }
             } catch (Exception ignored) {
                 // ignore json parse error
             }
         }
+
+        // 将额外输出字段也放入 metadata，方便子类转换
+        for (String extraField : extraOutputFields) {
+            Object value = entity.get(extraField);
+            if (value != null) {
+                metadata.put(extraField, value);
+            }
+        }
+
+        builder.metadata(metadata);
 
         return builder.build();
     }

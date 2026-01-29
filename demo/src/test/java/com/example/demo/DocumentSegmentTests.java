@@ -1,9 +1,10 @@
 package com.example.demo;
 
 import com.example.demo.entity.DocumentSegment;
-import com.example.demo.repository.DocumentSegmentRepository;
-import com.example.demo.repository.DocumentSegmentRepository.DocumentSegmentSearchResult;
 import com.fyj.rag.client.MilvusClient;
+import com.fyj.rag.vectorstore.Document;
+import com.fyj.rag.vectorstore.MilvusVectorStore;
+import com.fyj.rag.vectorstore.SearchResult;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -15,7 +16,12 @@ import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * DocumentSegment 测试用例
+ * DocumentSegment 测试用例 - 直接使用 MilvusVectorStore
+ * <p>
+ * 由于 DocumentSegment 继承 Document，可以直接使用 MilvusVectorStore 的所有方法
+ * 不需要额外的 Repository 层
+ * <p>
+ * 注意：运行测试前需要启动 Milvus 服务
  */
 @SpringBootTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -24,9 +30,9 @@ class DocumentSegmentTests {
     @Autowired
     private MilvusClient milvusClient;
 
-    private static DocumentSegmentRepository repository;
+    private static MilvusVectorStore vectorStore;
 
-    private static final int DIMENSION = 128;  // 测试用较小维度
+    private static final int DIMENSION = 128;
     private static final String KNOWLEDGE_1 = "knowledge_001";
     private static final String KNOWLEDGE_2 = "knowledge_002";
     private static final String FILE_1 = "file_001";
@@ -35,331 +41,353 @@ class DocumentSegmentTests {
 
     @BeforeAll
     static void setup(@Autowired MilvusClient client) {
-        repository = new DocumentSegmentRepository(client, DIMENSION);
+        // 直接获取 VectorStore，指定额外输出字段
+        vectorStore = client.getVectorStore(
+                DocumentSegment.COLLECTION_NAME,
+                DocumentSegment.FIELD_ID,
+                DocumentSegment.FIELD_CONTENT,
+                DocumentSegment.FIELD_EMBEDDING,
+                DocumentSegment.FIELD_METADATA,
+                Arrays.asList(DocumentSegment.FIELD_KNOWLEDGE_ID, DocumentSegment.FIELD_FILE_ID)
+        );
     }
 
-    // ==================== Collection 初始化 ====================
+    // ==================== 1. Collection 初始化 ====================
 
     @Test
     @Order(1)
-    @DisplayName("初始化 DocumentSegment Collection")
+    @DisplayName("1.1 初始化 Collection")
     void testInitCollection() {
-        // 先删除旧的（如果存在）
-        repository.dropCollection();
+        // 删除旧的
+        if (milvusClient.hasCollection(DocumentSegment.COLLECTION_NAME)) {
+            milvusClient.releaseCollection(DocumentSegment.COLLECTION_NAME);
+            milvusClient.dropCollection(DocumentSegment.COLLECTION_NAME);
+        }
 
-        // 初始化
-        repository.initCollection();
+        // 创建新的
+        milvusClient.createCollection(
+                DocumentSegment.COLLECTION_NAME,
+                DocumentSegment.createSchema(DIMENSION),
+                DocumentSegment.createIndex()
+        );
+        milvusClient.loadCollection(DocumentSegment.COLLECTION_NAME);
 
         assertTrue(milvusClient.hasCollection(DocumentSegment.COLLECTION_NAME));
-        System.out.println("✅ Collection initialized: " + DocumentSegment.COLLECTION_NAME);
-
-        // 查看字段
-        var desc = milvusClient.describeCollection(DocumentSegment.COLLECTION_NAME);
-        System.out.println("   Fields: " + desc.getFieldNames());
+        System.out.println("✅ Collection 创建成功: " + DocumentSegment.COLLECTION_NAME);
     }
 
-    // ==================== 插入操作测试 ====================
+    // ==================== 2. 插入操作 ====================
 
     @Test
     @Order(10)
-    @DisplayName("测试插入单个文档片段")
+    @DisplayName("2.1 插入单个 DocumentSegment")
     void testInsertSingle() {
         DocumentSegment segment = DocumentSegment.builder()
                 .id("seg_001")
                 .knowledgeId(KNOWLEDGE_1)
                 .fileId(FILE_1)
-                .content("这是第一个测试文档片段的内容")
+                .content("这是第一个测试文档片段")
                 .embedding(createRandomVector(DIMENSION))
-                .metadata(Map.of("chunk_index", 0, "total_chunks", 5))
+                .metadata(Map.of("chunk_index", 0))
                 .build();
 
-        repository.insert(segment);
-        System.out.println("✅ Inserted single segment: " + segment.getId());
+        // 直接使用 vectorStore.add()
+        // DocumentSegment 继承 Document，可以直接放入 List<Document>
+        List<Document> docs = Collections.singletonList(segment);
+        vectorStore.add(docs);
+
+        System.out.println("✅ 插入成功: " + segment.getId());
     }
 
     @Test
     @Order(11)
-    @DisplayName("测试批量插入文档片段")
+    @DisplayName("2.2 批量插入 DocumentSegment")
     void testInsertBatch() {
-        // 知识库1，文档1 的片段
+        // 知识库1，文档1
         List<DocumentSegment> segments1 = createTestSegments(KNOWLEDGE_1, FILE_1, 1, 5);
-        repository.insert(segments1);
-        System.out.println("✅ Inserted " + segments1.size() + " segments for " + KNOWLEDGE_1 + "/" + FILE_1);
+        vectorStore.add(new ArrayList<>(segments1));  // DocumentSegment 可以直接转为 List<Document>
+        System.out.println("✅ 插入 " + segments1.size() + " 个片段到 " + KNOWLEDGE_1 + "/" + FILE_1);
 
-        // 知识库1，文档2 的片段
+        // 知识库1，文档2
         List<DocumentSegment> segments2 = createTestSegments(KNOWLEDGE_1, FILE_2, 0, 3);
-        repository.insert(segments2);
-        System.out.println("✅ Inserted " + segments2.size() + " segments for " + KNOWLEDGE_1 + "/" + FILE_2);
+        vectorStore.add(new ArrayList<>(segments2));
+        System.out.println("✅ 插入 " + segments2.size() + " 个片段到 " + KNOWLEDGE_1 + "/" + FILE_2);
 
-        // 知识库2，文档3 的片段
+        // 知识库2，文档3
         List<DocumentSegment> segments3 = createTestSegments(KNOWLEDGE_2, FILE_3, 0, 4);
-        repository.insert(segments3);
-        System.out.println("✅ Inserted " + segments3.size() + " segments for " + KNOWLEDGE_2 + "/" + FILE_3);
+        vectorStore.add(new ArrayList<>(segments3));
+        System.out.println("✅ 插入 " + segments3.size() + " 个片段到 " + KNOWLEDGE_2 + "/" + FILE_3);
     }
 
-    // ==================== 查询操作测试 ====================
+    // ==================== 3. 查询操作 ====================
 
     @Test
     @Order(20)
-    @DisplayName("测试根据ID查询")
-    void testFindById() {
-        Optional<DocumentSegment> result = repository.findById("seg_001");
+    @DisplayName("3.1 根据 ID 查询")
+    void testGetById() {
+        List<Document> results = vectorStore.getById(Collections.singletonList("seg_001"));
 
-        assertTrue(result.isPresent());
-        assertEquals("seg_001", result.get().getId());
-        assertEquals(KNOWLEDGE_1, result.get().getKnowledgeId());
-        assertEquals(FILE_1, result.get().getFileId());
-        System.out.println("✅ Found by ID: " + result.get().getId());
-        System.out.println("   Content: " + result.get().getContent());
-        System.out.println("   Metadata: " + result.get().getMetadata());
+        assertFalse(results.isEmpty());
+
+        // 转换为 DocumentSegment
+        DocumentSegment segment = DocumentSegment.fromDocument(results.get(0));
+
+        assertEquals("seg_001", segment.getId());
+        assertEquals(KNOWLEDGE_1, segment.getKnowledgeId());
+        assertEquals(FILE_1, segment.getFileId());
+
+        System.out.println("✅ 查询成功: " + segment.getId());
+        System.out.println("   knowledgeId: " + segment.getKnowledgeId());
+        System.out.println("   fileId: " + segment.getFileId());
+        System.out.println("   content: " + segment.getContent());
     }
 
     @Test
     @Order(21)
-    @DisplayName("测试根据ID列表查询")
-    void testFindByIds() {
-        List<DocumentSegment> results = repository.findByIds(Arrays.asList(
-                "seg_001",
-                KNOWLEDGE_1 + "_" + FILE_1 + "_1",
-                KNOWLEDGE_1 + "_" + FILE_1 + "_2"
-        ));
+    @DisplayName("3.2 根据知识库ID查询")
+    void testQueryByKnowledgeId() {
+        // 使用 DocumentSegment 提供的过滤表达式
+        String filter = DocumentSegment.filterByKnowledgeId(KNOWLEDGE_1);
+        List<Document> results = vectorStore.query(filter, 100);
 
         assertFalse(results.isEmpty());
-        System.out.println("✅ Found by IDs: " + results.size());
-        results.forEach(s -> System.out.println("   - " + s.getId() + ": " + s.getContent().substring(0, Math.min(30, s.getContent().length())) + "..."));
+
+        // 转换并验证
+        List<DocumentSegment> segments = results.stream()
+                .map(DocumentSegment::fromDocument)
+                .toList();
+
+        segments.forEach(s -> assertEquals(KNOWLEDGE_1, s.getKnowledgeId()));
+
+        System.out.println("✅ 知识库 " + KNOWLEDGE_1 + " 有 " + segments.size() + " 个片段");
     }
 
     @Test
     @Order(22)
-    @DisplayName("测试根据知识库ID查询")
-    void testFindByKnowledgeId() {
-        List<DocumentSegment> results = repository.findByKnowledgeId(KNOWLEDGE_1);
+    @DisplayName("3.3 根据文档ID查询")
+    void testQueryByFileId() {
+        String filter = DocumentSegment.filterByFileId(FILE_1);
+        List<Document> results = vectorStore.query(filter, 100);
 
         assertFalse(results.isEmpty());
-        results.forEach(s -> assertEquals(KNOWLEDGE_1, s.getKnowledgeId()));
-        System.out.println("✅ Found " + results.size() + " segments in knowledge: " + KNOWLEDGE_1);
+
+        List<DocumentSegment> segments = results.stream()
+                .map(DocumentSegment::fromDocument)
+                .toList();
+
+        segments.forEach(s -> assertEquals(FILE_1, s.getFileId()));
+
+        System.out.println("✅ 文档 " + FILE_1 + " 有 " + segments.size() + " 个片段");
     }
 
     @Test
     @Order(23)
-    @DisplayName("测试根据文档ID查询")
-    void testFindByFileId() {
-        List<DocumentSegment> results = repository.findByFileId(FILE_1);
+    @DisplayName("3.4 组合条件查询")
+    void testQueryByKnowledgeIdAndFileId() {
+        String filter = DocumentSegment.filterByKnowledgeIdAndFileId(KNOWLEDGE_1, FILE_2);
+        List<Document> results = vectorStore.query(filter, 100);
 
         assertFalse(results.isEmpty());
-        results.forEach(s -> assertEquals(FILE_1, s.getFileId()));
-        System.out.println("✅ Found " + results.size() + " segments in file: " + FILE_1);
-    }
 
-    @Test
-    @Order(24)
-    @DisplayName("测试根据知识库ID和文档ID查询")
-    void testFindByKnowledgeIdAndFileId() {
-        List<DocumentSegment> results = repository.findByKnowledgeIdAndFileId(KNOWLEDGE_1, FILE_2);
+        List<DocumentSegment> segments = results.stream()
+                .map(DocumentSegment::fromDocument)
+                .toList();
 
-        assertFalse(results.isEmpty());
-        results.forEach(s -> {
+        segments.forEach(s -> {
             assertEquals(KNOWLEDGE_1, s.getKnowledgeId());
             assertEquals(FILE_2, s.getFileId());
         });
-        System.out.println("✅ Found " + results.size() + " segments in " + KNOWLEDGE_1 + "/" + FILE_2);
+
+        System.out.println("✅ " + KNOWLEDGE_1 + "/" + FILE_2 + " 有 " + segments.size() + " 个片段");
     }
 
-    @Test
-    @Order(25)
-    @DisplayName("测试统计数量")
-    void testCount() {
-        long countByKnowledge1 = repository.countByKnowledgeId(KNOWLEDGE_1);
-        long countByKnowledge2 = repository.countByKnowledgeId(KNOWLEDGE_2);
-        long countByFile1 = repository.countByFileId(FILE_1);
-
-        System.out.println("✅ Count by knowledge " + KNOWLEDGE_1 + ": " + countByKnowledge1);
-        System.out.println("   Count by knowledge " + KNOWLEDGE_2 + ": " + countByKnowledge2);
-        System.out.println("   Count by file " + FILE_1 + ": " + countByFile1);
-
-        assertTrue(countByKnowledge1 > 0);
-        assertTrue(countByKnowledge2 > 0);
-    }
-
-    // ==================== 向量搜索测试 ====================
+    // ==================== 4. 向量搜索 ====================
 
     @Test
     @Order(30)
-    @DisplayName("测试全局向量搜索")
-    void testSearchAll() {
+    @DisplayName("4.1 全局向量搜索")
+    void testGlobalSearch() {
         List<Float> queryVector = createRandomVector(DIMENSION);
 
-        List<DocumentSegmentSearchResult> results = repository.search(queryVector, 5);
+        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 5);
 
         assertFalse(results.isEmpty());
-        System.out.println("✅ Global search results: " + results.size());
-        results.forEach(r -> System.out.println("   - " + r.getSegment().getId()
-                + " [" + r.getSegment().getKnowledgeId() + "/" + r.getSegment().getFileId() + "]"
-                + " (score: " + r.getScore() + ")"));
+        System.out.println("✅ 全局搜索返回 " + results.size() + " 条结果:");
+
+        results.forEach(r -> {
+            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
+            System.out.println("   - " + seg.getId() +
+                    " [" + seg.getKnowledgeId() + "/" + seg.getFileId() + "]" +
+                    " (score: " + String.format("%.4f", r.getScore()) + ")");
+        });
     }
 
     @Test
     @Order(31)
-    @DisplayName("测试在指定知识库中搜索")
+    @DisplayName("4.2 在指定知识库中搜索")
     void testSearchInKnowledge() {
         List<Float> queryVector = createRandomVector(DIMENSION);
+        String filter = DocumentSegment.filterByKnowledgeId(KNOWLEDGE_1);
 
-        List<DocumentSegmentSearchResult> results = repository.searchInKnowledge(queryVector, 5, KNOWLEDGE_1);
+        // 使用带过滤条件的搜索
+        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 5, filter);
 
         assertFalse(results.isEmpty());
-        results.forEach(r -> assertEquals(KNOWLEDGE_1, r.getSegment().getKnowledgeId()));
-        System.out.println("✅ Search in knowledge " + KNOWLEDGE_1 + ": " + results.size());
-        results.forEach(r -> System.out.println("   - " + r.getSegment().getId() + " (score: " + r.getScore() + ")"));
+
+        // 验证所有结果都属于指定知识库
+        results.forEach(r -> {
+            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
+            assertEquals(KNOWLEDGE_1, seg.getKnowledgeId());
+        });
+
+        System.out.println("✅ 在知识库 " + KNOWLEDGE_1 + " 中搜索，返回 " + results.size() + " 条结果");
     }
 
     @Test
     @Order(32)
-    @DisplayName("测试在指定文档中搜索")
-    void testSearchInFile() {
+    @DisplayName("4.3 在多个知识库中搜索")
+    void testSearchInMultipleKnowledges() {
         List<Float> queryVector = createRandomVector(DIMENSION);
+        String filter = DocumentSegment.filterByKnowledgeIds(Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
 
-        List<DocumentSegmentSearchResult> results = repository.searchInFile(queryVector, 3, FILE_1);
+        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 10, filter);
 
         assertFalse(results.isEmpty());
-        results.forEach(r -> assertEquals(FILE_1, r.getSegment().getFileId()));
-        System.out.println("✅ Search in file " + FILE_1 + ": " + results.size());
-        results.forEach(r -> System.out.println("   - " + r.getSegment().getId() + " (score: " + r.getScore() + ")"));
+        System.out.println("✅ 在多个知识库中搜索，返回 " + results.size() + " 条结果:");
+
+        results.forEach(r -> {
+            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
+            System.out.println("   - " + seg.getId() + " [" + seg.getKnowledgeId() + "]");
+        });
     }
 
     @Test
     @Order(33)
-    @DisplayName("测试在多个知识库中搜索")
-    void testSearchInMultipleKnowledges() {
+    @DisplayName("4.4 在指定文档中搜索")
+    void testSearchInFile() {
         List<Float> queryVector = createRandomVector(DIMENSION);
+        String filter = DocumentSegment.filterByFileId(FILE_1);
 
-        List<DocumentSegmentSearchResult> results = repository.searchInKnowledges(
-                queryVector, 10, Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
+        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 3, filter);
 
         assertFalse(results.isEmpty());
-        System.out.println("✅ Search in multiple knowledges: " + results.size());
-        results.forEach(r -> System.out.println("   - " + r.getSegment().getId()
-                + " [" + r.getSegment().getKnowledgeId() + "]"
-                + " (score: " + r.getScore() + ")"));
+
+        results.forEach(r -> {
+            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
+            assertEquals(FILE_1, seg.getFileId());
+        });
+
+        System.out.println("✅ 在文档 " + FILE_1 + " 中搜索，返回 " + results.size() + " 条结果");
     }
 
-    // ==================== Upsert 测试 ====================
+    // ==================== 5. Upsert ====================
 
     @Test
     @Order(40)
-    @DisplayName("测试 Upsert 操作")
+    @DisplayName("5.1 Upsert 操作")
     void testUpsert() {
         // 更新已存在的
         DocumentSegment updateSegment = DocumentSegment.builder()
                 .id("seg_001")
                 .knowledgeId(KNOWLEDGE_1)
                 .fileId(FILE_1)
-                .content("这是更新后的内容 - Updated content")
+                .content("【已更新】Updated content via upsert")
                 .embedding(createRandomVector(DIMENSION))
-                .metadata(Map.of("chunk_index", 0, "total_chunks", 5, "updated", true))
+                .metadata(Map.of("updated", true))
                 .build();
 
         // 新增的
         DocumentSegment newSegment = DocumentSegment.builder()
-                .id("seg_upsert_new")
+                .id("upsert_new")
                 .knowledgeId(KNOWLEDGE_1)
                 .fileId(FILE_1)
                 .content("通过 upsert 新增的片段")
                 .embedding(createRandomVector(DIMENSION))
-                .metadata(Map.of("source", "upsert"))
                 .build();
 
-        repository.upsert(Arrays.asList(updateSegment, newSegment));
+        vectorStore.upsert(Arrays.asList(updateSegment, newSegment));
 
         // 验证
-        Optional<DocumentSegment> updated = repository.findById("seg_001");
-        assertTrue(updated.isPresent());
-        assertTrue(updated.get().getContent().contains("Updated"));
-        System.out.println("✅ Upsert completed");
-        System.out.println("   Updated content: " + updated.get().getContent());
+        List<Document> results = vectorStore.getById(Arrays.asList("seg_001", "upsert_new"));
+        assertEquals(2, results.size());
+
+        System.out.println("✅ Upsert 成功");
     }
 
-    // ==================== 删除测试 ====================
+    // ==================== 6. 删除 ====================
 
     @Test
     @Order(50)
-    @DisplayName("测试根据ID删除")
+    @DisplayName("6.1 根据 ID 删除")
     void testDeleteById() {
-        // 先添加一个测试片段
+        // 先插入
         DocumentSegment segment = DocumentSegment.builder()
-                .id("to_delete_001")
+                .id("to_delete")
                 .knowledgeId(KNOWLEDGE_1)
                 .fileId(FILE_1)
-                .content("This will be deleted")
+                .content("将被删除")
                 .embedding(createRandomVector(DIMENSION))
                 .build();
-        repository.insert(segment);
+        vectorStore.add(Collections.singletonList(segment));
 
         // 删除
-        repository.deleteById("to_delete_001");
+        vectorStore.delete(Collections.singletonList("to_delete"));
 
         // 验证
-        Optional<DocumentSegment> result = repository.findById("to_delete_001");
-        assertTrue(result.isEmpty());
-        System.out.println("✅ Deleted by ID");
+        List<Document> results = vectorStore.getById(Collections.singletonList("to_delete"));
+        assertTrue(results.isEmpty());
+
+        System.out.println("✅ 删除成功");
     }
 
     @Test
     @Order(51)
-    @DisplayName("测试根据文档ID删除所有片段")
-    void testDeleteByFileId() {
-        // 先添加测试片段
-        List<DocumentSegment> segments = createTestSegments("temp_knowledge", "temp_file", 0, 3);
-        repository.insert(segments);
+    @DisplayName("6.2 根据过滤条件删除（删除整个文档的片段）")
+    void testDeleteByFilter() {
+        // 先插入测试数据
+        String testFileId = "file_to_delete";
+        List<DocumentSegment> segments = createTestSegments("temp_kb", testFileId, 0, 3);
+        vectorStore.add(new ArrayList<>(segments));
 
-        long countBefore = repository.countByFileId("temp_file");
-        System.out.println("   Before delete: " + countBefore + " segments");
+        // 根据文档ID删除
+        String filter = DocumentSegment.filterByFileId(testFileId);
+        vectorStore.deleteByFilter(filter);
 
-        // 删除
-        repository.deleteByFileId("temp_file");
+        // 验证
+        List<Document> results = vectorStore.query(filter, 100);
+        assertTrue(results.isEmpty());
 
-        long countAfter = repository.countByFileId("temp_file");
-        assertEquals(0, countAfter);
-        System.out.println("✅ Deleted all segments in file: temp_file");
+        System.out.println("✅ 根据文档ID删除所有片段成功");
     }
 
-    // ==================== 清理测试 ====================
+    // ==================== 7. 清理 ====================
 
     @Test
     @Order(100)
-    @DisplayName("清理测试数据 - 删除 Collection")
+    @DisplayName("7.1 清理 - 删除 Collection")
     void testCleanup() {
-        repository.dropCollection();
+        milvusClient.releaseCollection(DocumentSegment.COLLECTION_NAME);
+        milvusClient.dropCollection(DocumentSegment.COLLECTION_NAME);
 
         assertFalse(milvusClient.hasCollection(DocumentSegment.COLLECTION_NAME));
-        System.out.println("✅ Collection dropped: " + DocumentSegment.COLLECTION_NAME);
+        System.out.println("✅ Collection 已删除");
     }
 
     // ==================== 辅助方法 ====================
 
-    /**
-     * 创建测试片段
-     */
     private List<DocumentSegment> createTestSegments(String knowledgeId, String fileId, int startIndex, int count) {
         return IntStream.range(startIndex, startIndex + count)
                 .mapToObj(i -> DocumentSegment.builder()
                         .id(knowledgeId + "_" + fileId + "_" + i)
                         .knowledgeId(knowledgeId)
                         .fileId(fileId)
-                        .content("这是知识库[" + knowledgeId + "]文档[" + fileId + "]的第" + i + "个片段的内容。" +
-                                "Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
+                        .content("知识库[" + knowledgeId + "]文档[" + fileId + "]的第" + i + "个片段内容")
                         .embedding(createRandomVector(DIMENSION))
-                        .metadata(Map.of(
-                                "chunk_index", i,
-                                "total_chunks", count,
-                                "create_time", System.currentTimeMillis()
-                        ))
+                        .metadata(Map.of("chunk_index", i, "total_chunks", count))
                         .build())
                 .collect(Collectors.toList());
     }
 
-    /**
-     * 创建随机向量
-     */
     private List<Float> createRandomVector(int dimension) {
         Random random = new Random();
         List<Float> vector = new ArrayList<>(dimension);

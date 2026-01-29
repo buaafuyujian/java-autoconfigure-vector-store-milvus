@@ -6,16 +6,6 @@ import com.fyj.rag.vectorstore.Document;
 import com.fyj.rag.vectorstore.MilvusVectorStore;
 import com.fyj.rag.vectorstore.SearchRequest;
 import com.fyj.rag.vectorstore.SearchResult;
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import io.milvus.v2.client.MilvusClientV2;
-import io.milvus.v2.service.vector.request.InsertReq;
-import io.milvus.v2.service.vector.request.QueryReq;
-import io.milvus.v2.service.vector.request.SearchReq;
-import io.milvus.v2.service.vector.request.UpsertReq;
-import io.milvus.v2.service.vector.request.data.FloatVec;
-import io.milvus.v2.service.vector.response.QueryResp;
-import io.milvus.v2.service.vector.response.SearchResp;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
@@ -24,24 +14,15 @@ import java.util.stream.Collectors;
 /**
  * 文档片段 Repository
  * <p>
- * 提供 DocumentSegment 的完整 CRUD 操作
+ * 基于 MilvusVectorStore 提供 DocumentSegment 的 CRUD 操作
+ * DocumentSegment 继承自 Document，可直接使用 MilvusVectorStore 的方法
  */
 @Slf4j
 public class DocumentSegmentRepository {
 
     private final MilvusClient milvusClient;
-    private final MilvusClientV2 nativeClient;
     private final MilvusVectorStore vectorStore;
     private final int dimension;
-
-    private static final Gson GSON = new Gson();
-    private static final List<String> OUTPUT_FIELDS = Arrays.asList(
-            DocumentSegment.FIELD_ID,
-            DocumentSegment.FIELD_KNOWLEDGE_ID,
-            DocumentSegment.FIELD_FILE_ID,
-            DocumentSegment.FIELD_CONTENT,
-            DocumentSegment.FIELD_METADATA
-    );
 
     public DocumentSegmentRepository(MilvusClient milvusClient) {
         this(milvusClient, DocumentSegment.DEFAULT_DIMENSION);
@@ -49,9 +30,16 @@ public class DocumentSegmentRepository {
 
     public DocumentSegmentRepository(MilvusClient milvusClient, int dimension) {
         this.milvusClient = milvusClient;
-        this.nativeClient = milvusClient.getNativeClient();
         this.dimension = dimension;
-        this.vectorStore = milvusClient.getVectorStore(DocumentSegment.COLLECTION_NAME);
+        // 使用带额外输出字段的 VectorStore，确保查询时能获取 knowledge_id 和 file_id
+        this.vectorStore = milvusClient.getVectorStore(
+                DocumentSegment.COLLECTION_NAME,
+                DocumentSegment.FIELD_ID,
+                DocumentSegment.FIELD_CONTENT,
+                DocumentSegment.FIELD_EMBEDDING,
+                DocumentSegment.FIELD_METADATA,
+                Arrays.asList(DocumentSegment.FIELD_KNOWLEDGE_ID, DocumentSegment.FIELD_FILE_ID)
+        );
     }
 
     // ==================== Collection 管理 ====================
@@ -96,21 +84,15 @@ public class DocumentSegmentRepository {
 
     /**
      * 批量插入文档片段
+     * DocumentSegment 继承自 Document，可直接传入 vectorStore.add()
      */
     public void insert(List<DocumentSegment> segments) {
         if (segments == null || segments.isEmpty()) {
             return;
         }
-
-        List<JsonObject> data = segments.stream()
-                .map(this::toJsonObject)
-                .collect(Collectors.toList());
-
-        nativeClient.insert(InsertReq.builder()
-                .collectionName(DocumentSegment.COLLECTION_NAME)
-                .data(data)
-                .build());
-
+        // DocumentSegment 是 Document 的子类，直接转换
+        List<Document> documents = new ArrayList<>(segments);
+        vectorStore.add(documents);
         log.info("Inserted {} document segments", segments.size());
     }
 
@@ -128,16 +110,8 @@ public class DocumentSegmentRepository {
         if (segments == null || segments.isEmpty()) {
             return;
         }
-
-        List<JsonObject> data = segments.stream()
-                .map(this::toJsonObject)
-                .collect(Collectors.toList());
-
-        nativeClient.upsert(UpsertReq.builder()
-                .collectionName(DocumentSegment.COLLECTION_NAME)
-                .data(data)
-                .build());
-
+        List<Document> documents = new ArrayList<>(segments);
+        vectorStore.upsert(documents);
         log.info("Upserted {} document segments", segments.size());
     }
 
@@ -147,8 +121,11 @@ public class DocumentSegmentRepository {
      * 根据 ID 获取文档片段
      */
     public Optional<DocumentSegment> findById(String id) {
-        List<DocumentSegment> results = findByIds(Collections.singletonList(id));
-        return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
+        List<Document> results = vectorStore.getById(Collections.singletonList(id));
+        if (results.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(DocumentSegment.fromDocument(results.get(0)));
     }
 
     /**
@@ -158,12 +135,10 @@ public class DocumentSegmentRepository {
         if (ids == null || ids.isEmpty()) {
             return Collections.emptyList();
         }
-
-        String filter = String.format("%s in [\"%s\"]",
-                DocumentSegment.FIELD_ID,
-                String.join("\", \"", ids));
-
-        return query(filter, ids.size());
+        List<Document> results = vectorStore.getById(ids);
+        return results.stream()
+                .map(DocumentSegment::fromDocument)
+                .collect(Collectors.toList());
     }
 
     /**
@@ -177,7 +152,10 @@ public class DocumentSegmentRepository {
      * 根据知识库ID查询片段（带限制）
      */
     public List<DocumentSegment> findByKnowledgeId(String knowledgeId, int limit) {
-        return query(DocumentSegment.filterByKnowledgeId(knowledgeId), limit);
+        List<Document> results = vectorStore.query(DocumentSegment.filterByKnowledgeId(knowledgeId), limit);
+        return results.stream()
+                .map(DocumentSegment::fromDocument)
+                .collect(Collectors.toList());
     }
 
     /**
@@ -191,29 +169,20 @@ public class DocumentSegmentRepository {
      * 根据文档ID查询片段（带限制）
      */
     public List<DocumentSegment> findByFileId(String fileId, int limit) {
-        return query(DocumentSegment.filterByFileId(fileId), limit);
+        List<Document> results = vectorStore.query(DocumentSegment.filterByFileId(fileId), limit);
+        return results.stream()
+                .map(DocumentSegment::fromDocument)
+                .collect(Collectors.toList());
     }
 
     /**
      * 根据知识库ID和文档ID查询片段
      */
     public List<DocumentSegment> findByKnowledgeIdAndFileId(String knowledgeId, String fileId) {
-        return query(DocumentSegment.filterByKnowledgeIdAndFileId(knowledgeId, fileId), 10000);
-    }
-
-    /**
-     * 通用查询方法
-     */
-    public List<DocumentSegment> query(String filter, int limit) {
-        QueryResp response = nativeClient.query(QueryReq.builder()
-                .collectionName(DocumentSegment.COLLECTION_NAME)
-                .filter(filter)
-                .outputFields(OUTPUT_FIELDS)
-                .limit(limit)
-                .build());
-
-        return response.getQueryResults().stream()
-                .map(this::fromQueryResult)
+        List<Document> results = vectorStore.query(
+                DocumentSegment.filterByKnowledgeIdAndFileId(knowledgeId, fileId), 10000);
+        return results.stream()
+                .map(DocumentSegment::fromDocument)
                 .collect(Collectors.toList());
     }
 
@@ -221,34 +190,16 @@ public class DocumentSegmentRepository {
      * 统计知识库中的片段数量
      */
     public long countByKnowledgeId(String knowledgeId) {
-        QueryResp response = nativeClient.query(QueryReq.builder()
-                .collectionName(DocumentSegment.COLLECTION_NAME)
-                .filter(DocumentSegment.filterByKnowledgeId(knowledgeId))
-                .outputFields(Collections.singletonList("count(*)"))
-                .build());
-
-        if (response.getQueryResults() != null && !response.getQueryResults().isEmpty()) {
-            Object count = response.getQueryResults().get(0).getEntity().get("count(*)");
-            return count != null ? ((Number) count).longValue() : 0L;
-        }
-        return 0L;
+        List<Document> results = vectorStore.query(DocumentSegment.filterByKnowledgeId(knowledgeId), 100000);
+        return results.size();
     }
 
     /**
      * 统计文档中的片段数量
      */
     public long countByFileId(String fileId) {
-        QueryResp response = nativeClient.query(QueryReq.builder()
-                .collectionName(DocumentSegment.COLLECTION_NAME)
-                .filter(DocumentSegment.filterByFileId(fileId))
-                .outputFields(Collections.singletonList("count(*)"))
-                .build());
-
-        if (response.getQueryResults() != null && !response.getQueryResults().isEmpty()) {
-            Object count = response.getQueryResults().get(0).getEntity().get("count(*)");
-            return count != null ? ((Number) count).longValue() : 0L;
-        }
-        return 0L;
+        List<Document> results = vectorStore.query(DocumentSegment.filterByFileId(fileId), 100000);
+        return results.size();
     }
 
     // ==================== 向量搜索 ====================
@@ -288,27 +239,18 @@ public class DocumentSegmentRepository {
      * 通用搜索方法
      */
     public List<DocumentSegmentSearchResult> search(List<Float> vector, int topK, String filter) {
-        SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
-                .collectionName(DocumentSegment.COLLECTION_NAME)
-                .annsField(DocumentSegment.FIELD_EMBEDDING)
-                .data(Collections.singletonList(new FloatVec(vector)))
-                .topK(topK)
-                .outputFields(OUTPUT_FIELDS);
-
+        List<SearchResult> results;
         if (filter != null && !filter.isEmpty()) {
-            builder.filter(filter);
+            results = vectorStore.similaritySearch(vector, topK, filter);
+        } else {
+            results = vectorStore.similaritySearch(vector, topK);
         }
 
-        SearchResp response = nativeClient.search(builder.build());
-
-        List<DocumentSegmentSearchResult> results = new ArrayList<>();
-        for (List<SearchResp.SearchResult> searchResults : response.getSearchResults()) {
-            for (SearchResp.SearchResult result : searchResults) {
-                DocumentSegment segment = fromSearchResult(result);
-                results.add(new DocumentSegmentSearchResult(segment, result.getScore()));
-            }
-        }
-        return results;
+        return results.stream()
+                .map(r -> new DocumentSegmentSearchResult(
+                        DocumentSegment.fromDocument(r.getDocument()),
+                        r.getScore()))
+                .collect(Collectors.toList());
     }
 
     // ==================== 删除操作 ====================
@@ -355,72 +297,13 @@ public class DocumentSegmentRepository {
         log.info("Deleted segments by filter: {}", filter);
     }
 
-    // ==================== 辅助方法 ====================
+    // ==================== 获取底层 VectorStore ====================
 
-    private JsonObject toJsonObject(DocumentSegment segment) {
-        JsonObject json = new JsonObject();
-        json.addProperty(DocumentSegment.FIELD_ID, segment.getId());
-        json.addProperty(DocumentSegment.FIELD_KNOWLEDGE_ID, segment.getKnowledgeId());
-        json.addProperty(DocumentSegment.FIELD_FILE_ID, segment.getFileId());
-        json.addProperty(DocumentSegment.FIELD_CONTENT, segment.getContent());
-        json.add(DocumentSegment.FIELD_EMBEDDING, GSON.toJsonTree(segment.getEmbedding()));
-        json.add(DocumentSegment.FIELD_METADATA, GSON.toJsonTree(segment.getMetadata()));
-        return json;
-    }
-
-    @SuppressWarnings("unchecked")
-    private DocumentSegment fromQueryResult(QueryResp.QueryResult result) {
-        Map<String, Object> entity = result.getEntity();
-        return fromEntity(entity);
-    }
-
-    @SuppressWarnings("unchecked")
-    private DocumentSegment fromSearchResult(SearchResp.SearchResult result) {
-        Map<String, Object> entity = result.getEntity();
-        return fromEntity(entity);
-    }
-
-    @SuppressWarnings("unchecked")
-    private DocumentSegment fromEntity(Map<String, Object> entity) {
-        DocumentSegment.DocumentSegmentBuilder builder = DocumentSegment.builder();
-
-        Object id = entity.get(DocumentSegment.FIELD_ID);
-        if (id != null) {
-            builder.id(id.toString());
-        }
-
-        Object knowledgeId = entity.get(DocumentSegment.FIELD_KNOWLEDGE_ID);
-        if (knowledgeId != null) {
-            builder.knowledgeId(knowledgeId.toString());
-        }
-
-        Object fileId = entity.get(DocumentSegment.FIELD_FILE_ID);
-        if (fileId != null) {
-            builder.fileId(fileId.toString());
-        }
-
-        Object content = entity.get(DocumentSegment.FIELD_CONTENT);
-        if (content != null) {
-            builder.content(content.toString());
-        }
-
-        Object embedding = entity.get(DocumentSegment.FIELD_EMBEDDING);
-        if (embedding instanceof List) {
-            builder.embedding((List<Float>) embedding);
-        }
-
-        Object metadata = entity.get(DocumentSegment.FIELD_METADATA);
-        if (metadata instanceof Map) {
-            builder.metadata((Map<String, Object>) metadata);
-        } else if (metadata instanceof String) {
-            try {
-                Map<String, Object> metadataMap = GSON.fromJson((String) metadata, Map.class);
-                builder.metadata(metadataMap);
-            } catch (Exception ignored) {
-            }
-        }
-
-        return builder.build();
+    /**
+     * 获取底层的 MilvusVectorStore，用于更复杂的操作
+     */
+    public MilvusVectorStore getVectorStore() {
+        return vectorStore;
     }
 
     /**
