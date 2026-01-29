@@ -97,25 +97,10 @@ public class Document {
 
     /**
      * 转换为 JsonObject，用于插入 Milvus
-     * 子类可以覆盖此方法添加额外字段
+     * 使用 Gson 序列化，子类的字段会自动包含
      */
-    public JsonObject toJsonObject(String idField, String contentField, String embeddingField, String metadataField) {
-        JsonObject json = new JsonObject();
-        json.addProperty(idField, this.id);
-
-        if (this.content != null) {
-            json.addProperty(contentField, this.content);
-        }
-
-        if (this.embedding != null) {
-            json.add(embeddingField, GSON.toJsonTree(this.embedding));
-        }
-
-        if (this.metadata != null && !this.metadata.isEmpty()) {
-            json.add(metadataField, GSON.toJsonTree(this.metadata));
-        }
-
-        return json;
+    public JsonObject toJsonObject() {
+        return GSON.toJsonTree(this).getAsJsonObject();
     }
 }
 

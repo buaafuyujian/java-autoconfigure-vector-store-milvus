@@ -132,14 +132,23 @@ public interface MilvusVectorStore {
     List<Document> query(String filterExpression, String partitionName);
 
     /**
-     * 根据过滤表达式查询文档（带限制）
+     * 根据过滤表达式查询文档（带分页）
+     *
+     * @param filterExpression 过滤表达式
+     * @param offset 偏移量
+     * @param limit 限制数量
      */
-    List<Document> query(String filterExpression, int limit);
+    List<Document> query(String filterExpression, int offset, int limit);
 
     /**
-     * 根据过滤表达式从指定分区查询文档（带限制）
+     * 根据过滤表达式从指定分区查询文档（带分页）
+     *
+     * @param filterExpression 过滤表达式
+     * @param partitionName 分区名
+     * @param offset 偏移量
+     * @param limit 限制数量
      */
-    List<Document> query(String filterExpression, String partitionName, int limit);
+    List<Document> query(String filterExpression, String partitionName, int offset, int limit);
 
     // ==================== 向量搜索 - 全局 ====================
 

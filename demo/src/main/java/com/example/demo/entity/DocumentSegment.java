@@ -4,7 +4,7 @@ import com.fyj.rag.schema.CollectionSchema;
 import com.fyj.rag.schema.FieldSchema;
 import com.fyj.rag.schema.IndexSchema;
 import com.fyj.rag.vectorstore.Document;
-import com.google.gson.JsonObject;
+import com.google.gson.annotations.SerializedName;
 import io.milvus.v2.common.IndexParam;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -32,6 +32,7 @@ public class DocumentSegment extends Document {
     /**
      * 所属文档ID
      */
+    @SerializedName("file_id")
     private String fileId;
 
     // ==================== Collection 配置常量 ====================
@@ -59,22 +60,6 @@ public class DocumentSegment extends Document {
         this.fileId = fileId;
     }
 
-    // ==================== 覆盖 toJsonObject 方法 ====================
-
-    /**
-     * 转换为 JsonObject，添加 fileId 字段
-     */
-    @Override
-    public JsonObject toJsonObject(String idField, String contentField, String embeddingField, String metadataField) {
-        JsonObject json = super.toJsonObject(idField, contentField, embeddingField, metadataField);
-
-        // 添加额外字段
-        if (this.fileId != null) {
-            json.addProperty(FIELD_FILE_ID, this.fileId);
-        }
-
-        return json;
-    }
 
     // ==================== Schema 创建方法 ====================
 

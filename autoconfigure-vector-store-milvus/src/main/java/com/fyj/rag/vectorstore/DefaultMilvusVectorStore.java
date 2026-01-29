@@ -351,25 +351,26 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
     @Override
     public List<Document> query(String filterExpression) {
-        return query(filterExpression, null, 1000);
+        return query(filterExpression, null, 0, 1000);
     }
 
     @Override
     public List<Document> query(String filterExpression, String partitionName) {
-        return query(filterExpression, partitionName, 1000);
+        return query(filterExpression, partitionName, 0, 1000);
     }
 
     @Override
-    public List<Document> query(String filterExpression, int limit) {
-        return query(filterExpression, null, limit);
+    public List<Document> query(String filterExpression, int offset, int limit) {
+        return query(filterExpression, null, offset, limit);
     }
 
     @Override
-    public List<Document> query(String filterExpression, String partitionName, int limit) {
+    public List<Document> query(String filterExpression, String partitionName, int offset, int limit) {
         try {
             QueryReq.QueryReqBuilder<?, ?> builder = QueryReq.builder()
                     .collectionName(collectionName)
                     .filter(filterExpression)
+                    .offset(offset)
                     .limit(limit);
 
             if (partitionName != null && !partitionName.isEmpty()) {
@@ -605,7 +606,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     private JsonObject documentToJsonObject(Document document) {
-        return document.toJsonObject("id", "content", "embedding", "metadata");
+        return document.toJsonObject();
     }
 
     private Document resultToDocument(QueryResp.QueryResult result) {
