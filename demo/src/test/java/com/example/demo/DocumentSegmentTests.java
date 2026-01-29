@@ -39,14 +39,7 @@ class DocumentSegmentTests {
 
     @BeforeAll
     static void setup(@Autowired MilvusClient client) {
-        vectorStore = client.getVectorStore(
-                DocumentSegment.COLLECTION_NAME,
-                DocumentSegment.FIELD_ID,
-                DocumentSegment.FIELD_CONTENT,
-                DocumentSegment.FIELD_EMBEDDING,
-                DocumentSegment.FIELD_METADATA,
-                Collections.singletonList(DocumentSegment.FIELD_FILE_ID)
-        );
+        vectorStore = client.getVectorStore(DocumentSegment.COLLECTION_NAME);
     }
 
     // ==================== 1. Collection 和分区初始化 ====================

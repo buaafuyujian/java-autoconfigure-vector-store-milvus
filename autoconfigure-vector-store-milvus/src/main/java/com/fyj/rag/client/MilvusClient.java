@@ -22,8 +22,6 @@ import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Milvus 客户端包装类
@@ -34,7 +32,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MilvusClient implements Closeable {
 
     private final MilvusClientV2 client;
-    private final Map<String, MilvusVectorStore> vectorStoreCache = new ConcurrentHashMap<>();
 
     public MilvusClient(MilvusClientV2 client) {
         this.client = client;
@@ -121,7 +118,6 @@ public class MilvusClient implements Closeable {
             client.dropCollection(DropCollectionReq.builder()
                     .collectionName(collectionName)
                     .build());
-            vectorStoreCache.remove(collectionName);
             log.info("Dropped collection: {}", collectionName);
         } catch (Exception e) {
             throw new MilvusCollectionException(ErrorCode.COLLECTION_DROP_FAILED,
@@ -179,7 +175,6 @@ public class MilvusClient implements Closeable {
                     .collectionName(oldName)
                     .newCollectionName(newName)
                     .build());
-            vectorStoreCache.remove(oldName);
             log.info("Renamed collection from {} to {}", oldName, newName);
         } catch (Exception e) {
             throw new MilvusCollectionException(ErrorCode.UNKNOWN_ERROR,
@@ -287,42 +282,10 @@ public class MilvusClient implements Closeable {
     // ==================== VectorStore 获取 ====================
 
     /**
-     * 获取 VectorStore 实例（使用默认字段名）
+     * 获取 VectorStore 实例
      */
     public MilvusVectorStore getVectorStore(String collectionName) {
-        return vectorStoreCache.computeIfAbsent(collectionName,
-                name -> new DefaultMilvusVectorStore(client, name));
-    }
-
-    /**
-     * 获取 VectorStore 实例（自定义字段名）
-     */
-    public MilvusVectorStore getVectorStore(String collectionName,
-                                            String idFieldName,
-                                            String contentFieldName,
-                                            String embeddingFieldName,
-                                            String metadataFieldName) {
-        String cacheKey = collectionName + "_" + idFieldName + "_" + contentFieldName
-                + "_" + embeddingFieldName + "_" + metadataFieldName;
-        return vectorStoreCache.computeIfAbsent(cacheKey,
-                name -> new DefaultMilvusVectorStore(client, collectionName,
-                        idFieldName, contentFieldName, embeddingFieldName, metadataFieldName));
-    }
-
-    /**
-     * 获取 VectorStore 实例（自定义字段名 + 额外输出字段）
-     */
-    public MilvusVectorStore getVectorStore(String collectionName,
-                                            String idFieldName,
-                                            String contentFieldName,
-                                            String embeddingFieldName,
-                                            String metadataFieldName,
-                                            List<String> extraOutputFields) {
-        String cacheKey = collectionName + "_" + idFieldName + "_" + contentFieldName
-                + "_" + embeddingFieldName + "_" + metadataFieldName + "_" + String.join(",", extraOutputFields);
-        return vectorStoreCache.computeIfAbsent(cacheKey,
-                name -> new DefaultMilvusVectorStore(client, collectionName,
-                        idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, extraOutputFields));
+        return new DefaultMilvusVectorStore(client, collectionName);
     }
 
     /**
@@ -330,29 +293,9 @@ public class MilvusClient implements Closeable {
      */
     public MilvusVectorStore getVectorStore(String collectionName,
                                             org.springframework.ai.embedding.EmbeddingModel embeddingModel) {
-        String cacheKey = collectionName + "_with_embedding";
-        return vectorStoreCache.computeIfAbsent(cacheKey,
-                name -> new DefaultMilvusVectorStore(client, collectionName, embeddingModel));
+        return new DefaultMilvusVectorStore(client, collectionName, embeddingModel);
     }
 
-    /**
-     * 获取 VectorStore 实例（完整参数 + EmbeddingModel）
-     */
-    public MilvusVectorStore getVectorStore(String collectionName,
-                                            String idFieldName,
-                                            String contentFieldName,
-                                            String embeddingFieldName,
-                                            String metadataFieldName,
-                                            List<String> extraOutputFields,
-                                            org.springframework.ai.embedding.EmbeddingModel embeddingModel) {
-        String cacheKey = collectionName + "_" + idFieldName + "_" + contentFieldName
-                + "_" + embeddingFieldName + "_" + metadataFieldName
-                + "_" + String.join(",", extraOutputFields) + "_with_embedding";
-        return vectorStoreCache.computeIfAbsent(cacheKey,
-                name -> new DefaultMilvusVectorStore(client, collectionName,
-                        idFieldName, contentFieldName, embeddingFieldName, metadataFieldName,
-                        extraOutputFields, embeddingModel));
-    }
 
     // ==================== 原始客户端 ====================
 
@@ -368,7 +311,6 @@ public class MilvusClient implements Closeable {
     @Override
     public void close() {
         try {
-            vectorStoreCache.clear();
             client.close();
             log.info("Milvus client closed");
         } catch (Exception e) {

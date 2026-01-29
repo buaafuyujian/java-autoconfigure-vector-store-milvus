@@ -28,59 +28,19 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
     private final MilvusClientV2 client;
     private final String collectionName;
-    private final String idFieldName;
-    private final String contentFieldName;
-    private final String embeddingFieldName;
-    private final String metadataFieldName;
-    private final List<String> outputFields;
-    private final List<String> extraOutputFields;
-
-    /**
-     * 嵌入模型（可选）
-     */
     private final EmbeddingModel embeddingModel;
 
     private static final Gson GSON = new Gson();
 
+
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName) {
-        this(client, collectionName, "id", "content", "embedding", "metadata", Collections.emptyList(), null);
+        this(client, collectionName, null);
     }
 
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName, EmbeddingModel embeddingModel) {
-        this(client, collectionName, "id", "content", "embedding", "metadata", Collections.emptyList(), embeddingModel);
-    }
-
-    public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
-                                    String idFieldName, String contentFieldName,
-                                    String embeddingFieldName, String metadataFieldName) {
-        this(client, collectionName, idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, Collections.emptyList(), null);
-    }
-
-    public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
-                                    String idFieldName, String contentFieldName,
-                                    String embeddingFieldName, String metadataFieldName,
-                                    List<String> extraOutputFields) {
-        this(client, collectionName, idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, extraOutputFields, null);
-    }
-
-    public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
-                                    String idFieldName, String contentFieldName,
-                                    String embeddingFieldName, String metadataFieldName,
-                                    List<String> extraOutputFields,
-                                    EmbeddingModel embeddingModel) {
         this.client = client;
         this.collectionName = collectionName;
-        this.idFieldName = idFieldName;
-        this.contentFieldName = contentFieldName;
-        this.embeddingFieldName = embeddingFieldName;
-        this.metadataFieldName = metadataFieldName;
-        this.extraOutputFields = extraOutputFields != null ? extraOutputFields : Collections.emptyList();
         this.embeddingModel = embeddingModel;
-
-        // 构建输出字段列表
-        List<String> fields = new ArrayList<>(Arrays.asList(idFieldName, contentFieldName, metadataFieldName));
-        fields.addAll(this.extraOutputFields);
-        this.outputFields = fields;
     }
 
     // ==================== Collection 信息 ====================
@@ -373,8 +333,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         try {
             GetReq.GetReqBuilder<?, ?> builder = GetReq.builder()
                     .collectionName(collectionName)
-                    .ids(new ArrayList<>(ids))
-                    .outputFields(outputFields);
+                    .ids(new ArrayList<>(ids));
 
             if (partitionName != null && !partitionName.isEmpty()) {
                 builder.partitionName(partitionName);
@@ -411,7 +370,6 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
             QueryReq.QueryReqBuilder<?, ?> builder = QueryReq.builder()
                     .collectionName(collectionName)
                     .filter(filterExpression)
-                    .outputFields(outputFields)
                     .limit(limit);
 
             if (partitionName != null && !partitionName.isEmpty()) {
@@ -503,8 +461,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
                     .collectionName(collectionName)
                     .annsField(request.getVectorFieldName())
                     .data(Collections.singletonList(new FloatVec(request.getVector())))
-                    .topK(request.getTopK())
-                    .outputFields(outputFields);
+                    .topK(request.getTopK());
 
             if (request.getFilter() != null && !request.getFilter().isEmpty()) {
                 builder.filter(request.getFilter());
@@ -648,7 +605,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     private JsonObject documentToJsonObject(Document document) {
-        return document.toJsonObject(idFieldName, contentFieldName, embeddingFieldName, metadataFieldName);
+        return document.toJsonObject("id", "content", "embedding", "metadata");
     }
 
     private Document resultToDocument(QueryResp.QueryResult result) {
@@ -670,24 +627,24 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     private Document entityToDocument(Map<String, Object> entity) {
         Document.DocumentBuilder<?, ?> builder = Document.builder();
 
-        Object id = entity.get(idFieldName);
+        Object id = entity.get("id");
         if (id != null) {
             builder.id(id.toString());
         }
 
-        Object content = entity.get(contentFieldName);
+        Object content = entity.get("content");
         if (content != null) {
             builder.content(content.toString());
         }
 
-        Object embedding = entity.get(embeddingFieldName);
+        Object embedding = entity.get("embedding");
         if (embedding instanceof List) {
             builder.embedding((List<Float>) embedding);
         }
 
         // 处理 metadata
         Map<String, Object> metadata = new HashMap<>();
-        Object metadataObj = entity.get(metadataFieldName);
+        Object metadataObj = entity.get("metadata");
         if (metadataObj instanceof Map) {
             metadata.putAll((Map<String, Object>) metadataObj);
         } else if (metadataObj instanceof String) {
@@ -701,11 +658,12 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
             }
         }
 
-        // 将额外输出字段也放入 metadata，方便子类转换
-        for (String extraField : extraOutputFields) {
-            Object value = entity.get(extraField);
-            if (value != null) {
-                metadata.put(extraField, value);
+        // 将其他字段也放入 metadata（用于子类扩展字段）
+        for (Map.Entry<String, Object> entry : entity.entrySet()) {
+            String key = entry.getKey();
+            if (!"id".equals(key) && !"content".equals(key)
+                    && !"embedding".equals(key) && !"metadata".equals(key)) {
+                metadata.put(key, entry.getValue());
             }
         }
 
