@@ -325,6 +325,35 @@ public class MilvusClient implements Closeable {
                         idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, extraOutputFields));
     }
 
+    /**
+     * 获取 VectorStore 实例（带 EmbeddingModel，支持自动嵌入）
+     */
+    public MilvusVectorStore getVectorStore(String collectionName,
+                                            org.springframework.ai.embedding.EmbeddingModel embeddingModel) {
+        String cacheKey = collectionName + "_with_embedding";
+        return vectorStoreCache.computeIfAbsent(cacheKey,
+                name -> new DefaultMilvusVectorStore(client, collectionName, embeddingModel));
+    }
+
+    /**
+     * 获取 VectorStore 实例（完整参数 + EmbeddingModel）
+     */
+    public MilvusVectorStore getVectorStore(String collectionName,
+                                            String idFieldName,
+                                            String contentFieldName,
+                                            String embeddingFieldName,
+                                            String metadataFieldName,
+                                            List<String> extraOutputFields,
+                                            org.springframework.ai.embedding.EmbeddingModel embeddingModel) {
+        String cacheKey = collectionName + "_" + idFieldName + "_" + contentFieldName
+                + "_" + embeddingFieldName + "_" + metadataFieldName
+                + "_" + String.join(",", extraOutputFields) + "_with_embedding";
+        return vectorStoreCache.computeIfAbsent(cacheKey,
+                name -> new DefaultMilvusVectorStore(client, collectionName,
+                        idFieldName, contentFieldName, embeddingFieldName, metadataFieldName,
+                        extraOutputFields, embeddingModel));
+    }
+
     // ==================== 原始客户端 ====================
 
     /**

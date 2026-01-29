@@ -180,6 +180,34 @@ public interface MilvusVectorStore {
      */
     List<SearchResult> similaritySearchInPartitions(List<Float> vector, int topK, List<String> partitionNames);
 
+    // ==================== 文本搜索（需要 EmbeddingModel）====================
+
+    /**
+     * 使用文本进行相似度搜索（自动转换为向量）
+     * <p>
+     * 需要在创建 VectorStore 时提供 EmbeddingModel
+     *
+     * @param query 查询文本
+     * @param topK 返回数量
+     * @return 搜索结果
+     */
+    List<SearchResult> similaritySearch(String query, int topK);
+
+    /**
+     * 使用文本进行相似度搜索（带过滤条件）
+     */
+    List<SearchResult> similaritySearch(String query, int topK, String filter);
+
+    /**
+     * 在指定分区使用文本进行相似度搜索
+     */
+    List<SearchResult> similaritySearchInPartition(String query, int topK, String partitionName);
+
+    /**
+     * 在多个分区使用文本进行相似度搜索
+     */
+    List<SearchResult> similaritySearchInPartitions(String query, int topK, List<String> partitionNames);
+
     // ==================== 数据管理 ====================
 
     /**

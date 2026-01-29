@@ -11,12 +11,17 @@ import io.milvus.v2.service.vector.request.*;
 import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.response.*;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.embedding.EmbeddingModel;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
  * MilvusVectorStore 默认实现
+ * <p>
+ * 支持可选的 EmbeddingModel，当设置了 EmbeddingModel 时：
+ * - add/upsert 时会自动对没有 embedding 的文档进行向量化
+ * - similaritySearch 支持直接传入文本进行搜索
  */
 @Slf4j
 public class DefaultMilvusVectorStore implements MilvusVectorStore {
@@ -30,22 +35,39 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     private final List<String> outputFields;
     private final List<String> extraOutputFields;
 
+    /**
+     * 嵌入模型（可选）
+     */
+    private final EmbeddingModel embeddingModel;
+
     private static final Gson GSON = new Gson();
 
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName) {
-        this(client, collectionName, "id", "content", "embedding", "metadata", Collections.emptyList());
+        this(client, collectionName, "id", "content", "embedding", "metadata", Collections.emptyList(), null);
+    }
+
+    public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName, EmbeddingModel embeddingModel) {
+        this(client, collectionName, "id", "content", "embedding", "metadata", Collections.emptyList(), embeddingModel);
     }
 
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
                                     String idFieldName, String contentFieldName,
                                     String embeddingFieldName, String metadataFieldName) {
-        this(client, collectionName, idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, Collections.emptyList());
+        this(client, collectionName, idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, Collections.emptyList(), null);
     }
 
     public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
                                     String idFieldName, String contentFieldName,
                                     String embeddingFieldName, String metadataFieldName,
                                     List<String> extraOutputFields) {
+        this(client, collectionName, idFieldName, contentFieldName, embeddingFieldName, metadataFieldName, extraOutputFields, null);
+    }
+
+    public DefaultMilvusVectorStore(MilvusClientV2 client, String collectionName,
+                                    String idFieldName, String contentFieldName,
+                                    String embeddingFieldName, String metadataFieldName,
+                                    List<String> extraOutputFields,
+                                    EmbeddingModel embeddingModel) {
         this.client = client;
         this.collectionName = collectionName;
         this.idFieldName = idFieldName;
@@ -53,6 +75,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         this.embeddingFieldName = embeddingFieldName;
         this.metadataFieldName = metadataFieldName;
         this.extraOutputFields = extraOutputFields != null ? extraOutputFields : Collections.emptyList();
+        this.embeddingModel = embeddingModel;
 
         // 构建输出字段列表
         List<String> fields = new ArrayList<>(Arrays.asList(idFieldName, contentFieldName, metadataFieldName));
@@ -228,7 +251,10 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
             return;
         }
         try {
-            List<JsonObject> data = documents.stream()
+            // 自动嵌入：对没有 embedding 的文档进行向量化
+            List<Document> processedDocs = embedDocumentsIfNeeded(documents);
+
+            List<JsonObject> data = processedDocs.stream()
                     .map(this::documentToJsonObject)
                     .collect(Collectors.toList());
 
@@ -308,7 +334,10 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
             return;
         }
         try {
-            List<JsonObject> data = documents.stream()
+            // 自动嵌入：对没有 embedding 的文档进行向量化
+            List<Document> processedDocs = embedDocumentsIfNeeded(documents);
+
+            List<JsonObject> data = processedDocs.stream()
                     .map(this::documentToJsonObject)
                     .collect(Collectors.toList());
 
@@ -438,6 +467,36 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         return similaritySearchInPartitions(SearchRequest.of(vector, topK), partitionNames);
     }
 
+    // ==================== 文本搜索（需要 EmbeddingModel）====================
+
+    @Override
+    public List<SearchResult> similaritySearch(String query, int topK) {
+        return similaritySearch(query, topK, null);
+    }
+
+    @Override
+    public List<SearchResult> similaritySearch(String query, int topK, String filter) {
+        List<Float> vector = embedQuery(query);
+        SearchRequest request = SearchRequest.builder()
+                .vector(vector)
+                .topK(topK)
+                .filter(filter)
+                .build();
+        return doSearch(request, null);
+    }
+
+    @Override
+    public List<SearchResult> similaritySearchInPartition(String query, int topK, String partitionName) {
+        List<Float> vector = embedQuery(query);
+        return doSearch(SearchRequest.of(vector, topK), Collections.singletonList(partitionName));
+    }
+
+    @Override
+    public List<SearchResult> similaritySearchInPartitions(String query, int topK, List<String> partitionNames) {
+        List<Float> vector = embedQuery(query);
+        return doSearch(SearchRequest.of(vector, topK), partitionNames);
+    }
+
     private List<SearchResult> doSearch(SearchRequest request, List<String> partitionNames) {
         try {
             SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
@@ -513,6 +572,80 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     // ==================== 辅助方法 ====================
+
+    /**
+     * 对文档进行嵌入处理（如果需要）
+     * <p>
+     * 如果文档没有 embedding 且设置了 embeddingModel，则自动进行向量化
+     */
+    private List<Document> embedDocumentsIfNeeded(List<Document> documents) {
+        if (embeddingModel == null) {
+            return documents;
+        }
+
+        // 找出需要嵌入的文档
+        List<Document> docsNeedEmbedding = new ArrayList<>();
+        List<Integer> indices = new ArrayList<>();
+
+        for (int i = 0; i < documents.size(); i++) {
+            Document doc = documents.get(i);
+            if (doc.getEmbedding() == null || doc.getEmbedding().isEmpty()) {
+                if (doc.getContent() != null && !doc.getContent().isEmpty()) {
+                    docsNeedEmbedding.add(doc);
+                    indices.add(i);
+                }
+            }
+        }
+
+        if (docsNeedEmbedding.isEmpty()) {
+            return documents;
+        }
+
+        // 批量获取嵌入向量
+        List<String> texts = docsNeedEmbedding.stream()
+                .map(Document::getContent)
+                .collect(Collectors.toList());
+
+        // EmbeddingModel.embed(List<String>) 返回 List<float[]>
+        List<float[]> embeddingsList = embeddingModel.embed(texts);
+
+        // 将嵌入向量设置回文档
+        List<Document> result = new ArrayList<>(documents);
+        for (int i = 0; i < indices.size(); i++) {
+            int docIndex = indices.get(i);
+            Document originalDoc = result.get(docIndex);
+
+            // 提取该文档的向量
+            float[] embeddingArray = embeddingsList.get(i);
+            List<Float> vector = new ArrayList<>(embeddingArray.length);
+            for (float f : embeddingArray) {
+                vector.add(f);
+            }
+
+            // 直接设置 embedding（支持子类）
+            originalDoc.setEmbedding(vector);
+        }
+
+        log.debug("Embedded {} documents using EmbeddingModel", indices.size());
+        return result;
+    }
+
+    /**
+     * 将查询文本转换为向量
+     */
+    private List<Float> embedQuery(String query) {
+        if (embeddingModel == null) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "EmbeddingModel is required for text-based search. Please provide an EmbeddingModel when creating the VectorStore.", null);
+        }
+
+        float[] embedding = embeddingModel.embed(query);
+        List<Float> vector = new ArrayList<>(embedding.length);
+        for (float f : embedding) {
+            vector.add(f);
+        }
+        return vector;
+    }
 
     private JsonObject documentToJsonObject(Document document) {
         return document.toJsonObject(idFieldName, contentFieldName, embeddingFieldName, metadataFieldName);
