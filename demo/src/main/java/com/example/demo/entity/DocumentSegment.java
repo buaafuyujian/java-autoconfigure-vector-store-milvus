@@ -44,11 +44,7 @@ public class DocumentSegment extends Document {
     /**
      * 字段名称常量
      */
-    public static final String FIELD_ID = "id";
     public static final String FIELD_FILE_ID = "file_id";
-    public static final String FIELD_CONTENT = "content";
-    public static final String FIELD_EMBEDDING = "embedding";
-    public static final String FIELD_METADATA = "metadata";
 
     /**
      * 默认向量维度（OpenAI text-embedding-ada-002 为 1536）

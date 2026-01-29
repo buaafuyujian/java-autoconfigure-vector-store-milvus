@@ -43,6 +43,14 @@ public class Document {
     private Map<String, Object> metadata;
 
     /**
+     * 字段名称常量
+     */
+    public static final String FIELD_ID = "id";
+    public static final String FIELD_CONTENT = "content";
+    public static final String FIELD_EMBEDDING = "embedding";
+    public static final String FIELD_METADATA = "metadata";
+
+    /**
      * 创建文档
      */
     public static Document of(String id, String content, List<Float> embedding) {
