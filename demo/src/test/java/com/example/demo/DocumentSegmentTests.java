@@ -16,12 +16,10 @@ import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * DocumentSegment 测试用例 - 直接使用 MilvusVectorStore
+ * DocumentSegment 测试用例 - 使用分区功能
  * <p>
- * 由于 DocumentSegment 继承 Document，可以直接使用 MilvusVectorStore 的所有方法
- * 不需要额外的 Repository 层
- * <p>
- * 注意：运行测试前需要启动 Milvus 服务
+ * 每个知识库对应一个分区，通过分区来隔离不同知识库的数据
+ * DocumentSegment 不存储 knowledgeId，知识库信息通过分区名推断
  */
 @SpringBootTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -33,38 +31,35 @@ class DocumentSegmentTests {
     private static MilvusVectorStore vectorStore;
 
     private static final int DIMENSION = 128;
-    private static final String KNOWLEDGE_1 = "knowledge_001";
-    private static final String KNOWLEDGE_2 = "knowledge_002";
+    private static final String KNOWLEDGE_1 = "kb001";  // 知识库1
+    private static final String KNOWLEDGE_2 = "kb002";  // 知识库2
     private static final String FILE_1 = "file_001";
     private static final String FILE_2 = "file_002";
     private static final String FILE_3 = "file_003";
 
     @BeforeAll
     static void setup(@Autowired MilvusClient client) {
-        // 直接获取 VectorStore，指定额外输出字段
         vectorStore = client.getVectorStore(
                 DocumentSegment.COLLECTION_NAME,
                 DocumentSegment.FIELD_ID,
                 DocumentSegment.FIELD_CONTENT,
                 DocumentSegment.FIELD_EMBEDDING,
                 DocumentSegment.FIELD_METADATA,
-                Arrays.asList(DocumentSegment.FIELD_KNOWLEDGE_ID, DocumentSegment.FIELD_FILE_ID)
+                Collections.singletonList(DocumentSegment.FIELD_FILE_ID)
         );
     }
 
-    // ==================== 1. Collection 初始化 ====================
+    // ==================== 1. Collection 和分区初始化 ====================
 
     @Test
     @Order(1)
     @DisplayName("1.1 初始化 Collection")
     void testInitCollection() {
-        // 删除旧的
         if (milvusClient.hasCollection(DocumentSegment.COLLECTION_NAME)) {
             milvusClient.releaseCollection(DocumentSegment.COLLECTION_NAME);
             milvusClient.dropCollection(DocumentSegment.COLLECTION_NAME);
         }
 
-        // 创建新的
         milvusClient.createCollection(
                 DocumentSegment.COLLECTION_NAME,
                 DocumentSegment.createSchema(DIMENSION),
@@ -76,98 +71,80 @@ class DocumentSegmentTests {
         System.out.println("✅ Collection 创建成功: " + DocumentSegment.COLLECTION_NAME);
     }
 
-    // ==================== 2. 插入操作 ====================
+    @Test
+    @Order(2)
+    @DisplayName("1.2 为每个知识库创建分区")
+    void testCreatePartitions() {
+        String partition1 = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+        vectorStore.createPartition(partition1);
+        System.out.println("✅ 创建分区: " + partition1 + " (知识库: " + KNOWLEDGE_1 + ")");
+
+        String partition2 = DocumentSegment.getPartitionName(KNOWLEDGE_2);
+        vectorStore.createPartition(partition2);
+        System.out.println("✅ 创建分区: " + partition2 + " (知识库: " + KNOWLEDGE_2 + ")");
+
+        List<String> partitions = vectorStore.listPartitions();
+        System.out.println("   所有分区: " + partitions);
+    }
+
+    // ==================== 2. 按分区插入数据 ====================
 
     @Test
     @Order(10)
-    @DisplayName("2.1 插入单个 DocumentSegment")
-    void testInsertSingle() {
-        DocumentSegment segment = DocumentSegment.builder()
-                .id("seg_001")
-                .knowledgeId(KNOWLEDGE_1)
-                .fileId(FILE_1)
-                .content("这是第一个测试文档片段")
-                .embedding(createRandomVector(DIMENSION))
-                .metadata(Map.of("chunk_index", 0))
-                .build();
+    @DisplayName("2.1 向知识库1的分区插入数据")
+    void testInsertToPartition1() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
-        // 直接使用 vectorStore.add()
-        // DocumentSegment 继承 Document，可以直接放入 List<Document>
-        List<Document> docs = Collections.singletonList(segment);
-        vectorStore.add(docs);
+        List<DocumentSegment> segments1 = createTestSegments(FILE_1, 0, 5);
+        vectorStore.add(new ArrayList<>(segments1), partition);
+        System.out.println("✅ 向分区 " + partition + " 插入 " + segments1.size() + " 个片段 (文档: " + FILE_1 + ")");
 
-        System.out.println("✅ 插入成功: " + segment.getId());
+        List<DocumentSegment> segments2 = createTestSegments(FILE_2, 0, 3);
+        vectorStore.add(new ArrayList<>(segments2), partition);
+        System.out.println("✅ 向分区 " + partition + " 插入 " + segments2.size() + " 个片段 (文档: " + FILE_2 + ")");
     }
 
     @Test
     @Order(11)
-    @DisplayName("2.2 批量插入 DocumentSegment")
-    void testInsertBatch() {
-        // 知识库1，文档1
-        List<DocumentSegment> segments1 = createTestSegments(KNOWLEDGE_1, FILE_1, 1, 5);
-        vectorStore.add(new ArrayList<>(segments1));  // DocumentSegment 可以直接转为 List<Document>
-        System.out.println("✅ 插入 " + segments1.size() + " 个片段到 " + KNOWLEDGE_1 + "/" + FILE_1);
+    @DisplayName("2.2 向知识库2的分区插入数据")
+    void testInsertToPartition2() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_2);
 
-        // 知识库1，文档2
-        List<DocumentSegment> segments2 = createTestSegments(KNOWLEDGE_1, FILE_2, 0, 3);
-        vectorStore.add(new ArrayList<>(segments2));
-        System.out.println("✅ 插入 " + segments2.size() + " 个片段到 " + KNOWLEDGE_1 + "/" + FILE_2);
-
-        // 知识库2，文档3
-        List<DocumentSegment> segments3 = createTestSegments(KNOWLEDGE_2, FILE_3, 0, 4);
-        vectorStore.add(new ArrayList<>(segments3));
-        System.out.println("✅ 插入 " + segments3.size() + " 个片段到 " + KNOWLEDGE_2 + "/" + FILE_3);
+        List<DocumentSegment> segments = createTestSegments(FILE_3, 0, 4);
+        vectorStore.add(new ArrayList<>(segments), partition);
+        System.out.println("✅ 向分区 " + partition + " 插入 " + segments.size() + " 个片段 (文档: " + FILE_3 + ")");
     }
 
-    // ==================== 3. 查询操作 ====================
+    @Test
+    @Order(12)
+    @DisplayName("2.3 统计各分区数据量")
+    void testCountByPartition() {
+        String partition1 = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+        String partition2 = DocumentSegment.getPartitionName(KNOWLEDGE_2);
+
+        long count1 = vectorStore.count(partition1);
+        long count2 = vectorStore.count(partition2);
+        long totalCount = vectorStore.count();
+
+        System.out.println("✅ 数据统计:");
+        System.out.println("   分区 " + partition1 + ": " + count1 + " 条");
+        System.out.println("   分区 " + partition2 + ": " + count2 + " 条");
+        System.out.println("   总计: " + totalCount + " 条");
+
+        assertEquals(8, count1);  // 5 + 3
+        assertEquals(4, count2);
+    }
+
+    // ==================== 3. 在指定分区中查询 ====================
 
     @Test
     @Order(20)
-    @DisplayName("3.1 根据 ID 查询")
-    void testGetById() {
-        List<Document> results = vectorStore.getById(Collections.singletonList("seg_001"));
-
-        assertFalse(results.isEmpty());
-
-        // 转换为 DocumentSegment
-        DocumentSegment segment = DocumentSegment.fromDocument(results.get(0));
-
-        assertEquals("seg_001", segment.getId());
-        assertEquals(KNOWLEDGE_1, segment.getKnowledgeId());
-        assertEquals(FILE_1, segment.getFileId());
-
-        System.out.println("✅ 查询成功: " + segment.getId());
-        System.out.println("   knowledgeId: " + segment.getKnowledgeId());
-        System.out.println("   fileId: " + segment.getFileId());
-        System.out.println("   content: " + segment.getContent());
-    }
-
-    @Test
-    @Order(21)
-    @DisplayName("3.2 根据知识库ID查询")
-    void testQueryByKnowledgeId() {
-        // 使用 DocumentSegment 提供的过滤表达式
-        String filter = DocumentSegment.filterByKnowledgeId(KNOWLEDGE_1);
-        List<Document> results = vectorStore.query(filter, 100);
-
-        assertFalse(results.isEmpty());
-
-        // 转换并验证
-        List<DocumentSegment> segments = results.stream()
-                .map(DocumentSegment::fromDocument)
-                .toList();
-
-        segments.forEach(s -> assertEquals(KNOWLEDGE_1, s.getKnowledgeId()));
-
-        System.out.println("✅ 知识库 " + KNOWLEDGE_1 + " 有 " + segments.size() + " 个片段");
-    }
-
-    @Test
-    @Order(22)
-    @DisplayName("3.3 根据文档ID查询")
-    void testQueryByFileId() {
+    @DisplayName("3.1 在知识库分区中按文档ID查询")
+    void testQueryInPartition() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String filter = DocumentSegment.filterByFileId(FILE_1);
-        List<Document> results = vectorStore.query(filter, 100);
+
+        List<Document> results = vectorStore.query(filter, partition, 100);
 
         assertFalse(results.isEmpty());
 
@@ -176,99 +153,82 @@ class DocumentSegmentTests {
                 .toList();
 
         segments.forEach(s -> assertEquals(FILE_1, s.getFileId()));
-
-        System.out.println("✅ 文档 " + FILE_1 + " 有 " + segments.size() + " 个片段");
+        System.out.println("✅ 在分区 " + partition + " 中查询文档 " + FILE_1 + "，返回 " + segments.size() + " 条");
     }
 
     @Test
-    @Order(23)
-    @DisplayName("3.4 组合条件查询")
-    void testQueryByKnowledgeIdAndFileId() {
-        String filter = DocumentSegment.filterByKnowledgeIdAndFileId(KNOWLEDGE_1, FILE_2);
-        List<Document> results = vectorStore.query(filter, 100);
+    @Order(21)
+    @DisplayName("3.2 根据ID从指定分区获取数据")
+    void testGetByIdInPartition() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+        String id = FILE_1 + "_0";
+
+        List<Document> results = vectorStore.getById(Collections.singletonList(id), partition);
 
         assertFalse(results.isEmpty());
+        DocumentSegment segment = DocumentSegment.fromDocument(results.get(0));
 
-        List<DocumentSegment> segments = results.stream()
-                .map(DocumentSegment::fromDocument)
-                .toList();
+        assertEquals(id, segment.getId());
+        assertEquals(FILE_1, segment.getFileId());
 
-        segments.forEach(s -> {
-            assertEquals(KNOWLEDGE_1, s.getKnowledgeId());
-            assertEquals(FILE_2, s.getFileId());
-        });
-
-        System.out.println("✅ " + KNOWLEDGE_1 + "/" + FILE_2 + " 有 " + segments.size() + " 个片段");
+        System.out.println("✅ 从分区获取: " + segment.getId());
+        System.out.println("   fileId: " + segment.getFileId());
+        System.out.println("   content: " + segment.getContent());
     }
 
-    // ==================== 4. 向量搜索 ====================
+    // ==================== 4. 在指定分区中向量搜索 ====================
 
     @Test
     @Order(30)
-    @DisplayName("4.1 全局向量搜索")
-    void testGlobalSearch() {
+    @DisplayName("4.1 在单个知识库（分区）中搜索")
+    void testSearchInSinglePartition() {
         List<Float> queryVector = createRandomVector(DIMENSION);
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
-        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 5);
+        List<SearchResult> results = vectorStore.similaritySearchInPartition(queryVector, 5, partition);
 
         assertFalse(results.isEmpty());
-        System.out.println("✅ 全局搜索返回 " + results.size() + " 条结果:");
 
+        System.out.println("✅ 在知识库 " + KNOWLEDGE_1 + " (分区 " + partition + ") 中搜索，返回 " + results.size() + " 条:");
         results.forEach(r -> {
             DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
-            System.out.println("   - " + seg.getId() +
-                    " [" + seg.getKnowledgeId() + "/" + seg.getFileId() + "]" +
-                    " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("   - " + seg.getId() + " [" + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
         });
     }
 
     @Test
     @Order(31)
-    @DisplayName("4.2 在指定知识库中搜索")
-    void testSearchInKnowledge() {
+    @DisplayName("4.2 在多个知识库（分区）中搜索")
+    void testSearchInMultiplePartitions() {
         List<Float> queryVector = createRandomVector(DIMENSION);
-        String filter = DocumentSegment.filterByKnowledgeId(KNOWLEDGE_1);
+        List<String> partitions = DocumentSegment.getPartitionNames(Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
 
-        // 使用带过滤条件的搜索
-        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 5, filter);
+        List<SearchResult> results = vectorStore.similaritySearchInPartitions(queryVector, 10, partitions);
 
         assertFalse(results.isEmpty());
 
-        // 验证所有结果都属于指定知识库
+        System.out.println("✅ 在多个知识库中搜索，返回 " + results.size() + " 条:");
         results.forEach(r -> {
             DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
-            assertEquals(KNOWLEDGE_1, seg.getKnowledgeId());
+            System.out.println("   - " + seg.getId() + " [" + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
         });
-
-        System.out.println("✅ 在知识库 " + KNOWLEDGE_1 + " 中搜索，返回 " + results.size() + " 条结果");
     }
 
     @Test
     @Order(32)
-    @DisplayName("4.3 在多个知识库中搜索")
-    void testSearchInMultipleKnowledges() {
+    @DisplayName("4.3 在分区中带过滤条件搜索（指定文档）")
+    void testSearchInPartitionWithFilter() {
         List<Float> queryVector = createRandomVector(DIMENSION);
-        String filter = DocumentSegment.filterByKnowledgeIds(Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
-
-        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 10, filter);
-
-        assertFalse(results.isEmpty());
-        System.out.println("✅ 在多个知识库中搜索，返回 " + results.size() + " 条结果:");
-
-        results.forEach(r -> {
-            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
-            System.out.println("   - " + seg.getId() + " [" + seg.getKnowledgeId() + "]");
-        });
-    }
-
-    @Test
-    @Order(33)
-    @DisplayName("4.4 在指定文档中搜索")
-    void testSearchInFile() {
-        List<Float> queryVector = createRandomVector(DIMENSION);
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String filter = DocumentSegment.filterByFileId(FILE_1);
 
-        List<SearchResult> results = vectorStore.similaritySearch(queryVector, 3, filter);
+        var request = com.fyj.rag.vectorstore.SearchRequest.builder()
+                .vector(queryVector)
+                .topK(3)
+                .filter(filter)
+                .build();
+
+        List<SearchResult> results = vectorStore.similaritySearchInPartition(request, partition);
 
         assertFalse(results.isEmpty());
 
@@ -277,87 +237,102 @@ class DocumentSegmentTests {
             assertEquals(FILE_1, seg.getFileId());
         });
 
-        System.out.println("✅ 在文档 " + FILE_1 + " 中搜索，返回 " + results.size() + " 条结果");
+        System.out.println("✅ 在分区 " + partition + " 中搜索文档 " + FILE_1 + "，返回 " + results.size() + " 条");
     }
 
-    // ==================== 5. Upsert ====================
+    // ==================== 5. 分区数据管理 ====================
 
     @Test
     @Order(40)
-    @DisplayName("5.1 Upsert 操作")
-    void testUpsert() {
-        // 更新已存在的
-        DocumentSegment updateSegment = DocumentSegment.builder()
-                .id("seg_001")
-                .knowledgeId(KNOWLEDGE_1)
-                .fileId(FILE_1)
-                .content("【已更新】Updated content via upsert")
-                .embedding(createRandomVector(DIMENSION))
-                .metadata(Map.of("updated", true))
-                .build();
+    @DisplayName("5.1 在指定分区中 Upsert")
+    void testUpsertInPartition() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
-        // 新增的
-        DocumentSegment newSegment = DocumentSegment.builder()
-                .id("upsert_new")
-                .knowledgeId(KNOWLEDGE_1)
+        DocumentSegment segment = DocumentSegment.builder()
+                .id("upsert_test")
                 .fileId(FILE_1)
-                .content("通过 upsert 新增的片段")
+                .content("在分区中 Upsert 的片段")
                 .embedding(createRandomVector(DIMENSION))
                 .build();
 
-        vectorStore.upsert(Arrays.asList(updateSegment, newSegment));
+        vectorStore.upsert(Collections.singletonList(segment), partition);
 
-        // 验证
-        List<Document> results = vectorStore.getById(Arrays.asList("seg_001", "upsert_new"));
-        assertEquals(2, results.size());
+        List<Document> results = vectorStore.getById(Collections.singletonList("upsert_test"), partition);
+        assertFalse(results.isEmpty());
 
-        System.out.println("✅ Upsert 成功");
+        System.out.println("✅ 在分区 " + partition + " 中 Upsert 成功");
     }
 
-    // ==================== 6. 删除 ====================
+    @Test
+    @Order(41)
+    @DisplayName("5.2 从指定分区删除数据")
+    void testDeleteInPartition() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        vectorStore.delete(Collections.singletonList("upsert_test"), partition);
+
+        List<Document> results = vectorStore.getById(Collections.singletonList("upsert_test"), partition);
+        assertTrue(results.isEmpty());
+
+        System.out.println("✅ 从分区 " + partition + " 删除成功");
+    }
+
+    @Test
+    @Order(42)
+    @DisplayName("5.3 删除某文档的所有片段")
+    void testDeleteByFileId() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        // 先插入测试数据
+        String testFileId = "file_to_delete";
+        List<DocumentSegment> segments = createTestSegments(testFileId, 0, 3);
+        vectorStore.add(new ArrayList<>(segments), partition);
+
+        long countBefore = vectorStore.count(partition);
+        System.out.println("   删除前分区数据量: " + countBefore);
+
+        // 根据文档ID删除
+        String filter = DocumentSegment.filterByFileId(testFileId);
+        vectorStore.deleteByFilter(filter, partition);
+
+        long countAfter = vectorStore.count(partition);
+        System.out.println("   删除后分区数据量: " + countAfter);
+
+        assertEquals(countBefore - 3, countAfter);
+        System.out.println("✅ 删除文档 " + testFileId + " 的所有片段成功");
+    }
+
+    // ==================== 6. 分区管理（知识库管理） ====================
 
     @Test
     @Order(50)
-    @DisplayName("6.1 根据 ID 删除")
-    void testDeleteById() {
-        // 先插入
-        DocumentSegment segment = DocumentSegment.builder()
-                .id("to_delete")
-                .knowledgeId(KNOWLEDGE_1)
-                .fileId(FILE_1)
-                .content("将被删除")
-                .embedding(createRandomVector(DIMENSION))
-                .build();
-        vectorStore.add(Collections.singletonList(segment));
+    @DisplayName("6.1 创建新知识库（新分区）")
+    void testCreateNewKnowledgePartition() {
+        String newKnowledgeId = "kb003";
+        String partition = DocumentSegment.getPartitionName(newKnowledgeId);
 
-        // 删除
-        vectorStore.delete(Collections.singletonList("to_delete"));
+        vectorStore.createPartition(partition);
+        assertTrue(vectorStore.hasPartition(partition));
 
-        // 验证
-        List<Document> results = vectorStore.getById(Collections.singletonList("to_delete"));
-        assertTrue(results.isEmpty());
+        List<DocumentSegment> segments = createTestSegments("new_file", 0, 2);
+        vectorStore.add(new ArrayList<>(segments), partition);
 
-        System.out.println("✅ 删除成功");
+        System.out.println("✅ 创建新知识库分区: " + partition);
+        System.out.println("   当前所有分区: " + vectorStore.listPartitions());
     }
 
     @Test
     @Order(51)
-    @DisplayName("6.2 根据过滤条件删除（删除整个文档的片段）")
-    void testDeleteByFilter() {
-        // 先插入测试数据
-        String testFileId = "file_to_delete";
-        List<DocumentSegment> segments = createTestSegments("temp_kb", testFileId, 0, 3);
-        vectorStore.add(new ArrayList<>(segments));
+    @DisplayName("6.2 删除知识库（删除分区及其数据）")
+    void testDeleteKnowledgePartition() {
+        String knowledgeId = "kb003";
+        String partition = DocumentSegment.getPartitionName(knowledgeId);
 
-        // 根据文档ID删除
-        String filter = DocumentSegment.filterByFileId(testFileId);
-        vectorStore.deleteByFilter(filter);
+        vectorStore.releasePartition(partition);
+        vectorStore.dropPartition(partition);
 
-        // 验证
-        List<Document> results = vectorStore.query(filter, 100);
-        assertTrue(results.isEmpty());
-
-        System.out.println("✅ 根据文档ID删除所有片段成功");
+        assertFalse(vectorStore.hasPartition(partition));
+        System.out.println("✅ 删除知识库分区: " + partition + " (数据同时删除)");
     }
 
     // ==================== 7. 清理 ====================
@@ -375,13 +350,12 @@ class DocumentSegmentTests {
 
     // ==================== 辅助方法 ====================
 
-    private List<DocumentSegment> createTestSegments(String knowledgeId, String fileId, int startIndex, int count) {
+    private List<DocumentSegment> createTestSegments(String fileId, int startIndex, int count) {
         return IntStream.range(startIndex, startIndex + count)
                 .mapToObj(i -> DocumentSegment.builder()
-                        .id(knowledgeId + "_" + fileId + "_" + i)
-                        .knowledgeId(knowledgeId)
+                        .id(fileId + "_" + i)
                         .fileId(fileId)
-                        .content("知识库[" + knowledgeId + "]文档[" + fileId + "]的第" + i + "个片段内容")
+                        .content("文档[" + fileId + "]的第" + i + "个片段内容。这是测试文本。")
                         .embedding(createRandomVector(DIMENSION))
                         .metadata(Map.of("chunk_index", i, "total_chunks", count))
                         .build())
@@ -394,7 +368,6 @@ class DocumentSegmentTests {
         for (int i = 0; i < dimension; i++) {
             vector.add(random.nextFloat());
         }
-        // 归一化
         float norm = 0;
         for (Float f : vector) {
             norm += f * f;

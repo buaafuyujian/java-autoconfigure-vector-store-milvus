@@ -20,17 +20,14 @@ import java.util.Map;
  * <p>
  * 继承自 Document，可直接用于 MilvusVectorStore 操作
  * 对应 Milvus Collection: document_segments
+ * <p>
+ * 注意：知识库通过分区（Partition）区分，不需要单独存储 knowledgeId
  */
 @Data
 @SuperBuilder
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = true)
 public class DocumentSegment extends Document {
-
-    /**
-     * 所属知识库ID
-     */
-    private String knowledgeId;
 
     /**
      * 所属文档ID
@@ -48,7 +45,6 @@ public class DocumentSegment extends Document {
      * 字段名称常量
      */
     public static final String FIELD_ID = "id";
-    public static final String FIELD_KNOWLEDGE_ID = "knowledge_id";
     public static final String FIELD_FILE_ID = "file_id";
     public static final String FIELD_CONTENT = "content";
     public static final String FIELD_EMBEDDING = "embedding";
@@ -61,26 +57,22 @@ public class DocumentSegment extends Document {
 
     // ==================== 构造方法 ====================
 
-    public DocumentSegment(String id, String knowledgeId, String fileId, String content,
+    public DocumentSegment(String id, String fileId, String content,
                            List<Float> embedding, Map<String, Object> metadata) {
         super(id, content, embedding, metadata != null ? metadata : new HashMap<>());
-        this.knowledgeId = knowledgeId;
         this.fileId = fileId;
     }
 
     // ==================== 覆盖 toJsonObject 方法 ====================
 
     /**
-     * 转换为 JsonObject，添加 knowledgeId 和 fileId 字段
+     * 转换为 JsonObject，添加 fileId 字段
      */
     @Override
     public JsonObject toJsonObject(String idField, String contentField, String embeddingField, String metadataField) {
         JsonObject json = super.toJsonObject(idField, contentField, embeddingField, metadataField);
 
         // 添加额外字段
-        if (this.knowledgeId != null) {
-            json.addProperty(FIELD_KNOWLEDGE_ID, this.knowledgeId);
-        }
         if (this.fileId != null) {
             json.addProperty(FIELD_FILE_ID, this.fileId);
         }
@@ -104,7 +96,6 @@ public class DocumentSegment extends Document {
         return CollectionSchema.create()
                 .description("Document segments for RAG knowledge base")
                 .field(FieldSchema.primaryKeyVarchar(FIELD_ID, 64))          // 主键，最大64字符
-                .field(FieldSchema.varchar(FIELD_KNOWLEDGE_ID, 64))          // 知识库ID
                 .field(FieldSchema.varchar(FIELD_FILE_ID, 64))               // 文档ID
                 .field(FieldSchema.varchar(FIELD_CONTENT, 65535))            // 内容，最大65535字符
                 .field(FieldSchema.floatVector(FIELD_EMBEDDING, dimension))  // 向量
@@ -139,39 +130,31 @@ public class DocumentSegment extends Document {
     /**
      * 创建文档片段
      */
-    public static DocumentSegment of(String id, String knowledgeId, String fileId,
-                                     String content, List<Float> embedding) {
-        return new DocumentSegment(id, knowledgeId, fileId, content, embedding, new HashMap<>());
+    public static DocumentSegment of(String id, String fileId, String content, List<Float> embedding) {
+        return new DocumentSegment(id, fileId, content, embedding, new HashMap<>());
     }
 
     /**
      * 创建文档片段（带元数据）
      */
-    public static DocumentSegment of(String id, String knowledgeId, String fileId,
-                                     String content, List<Float> embedding, Map<String, Object> metadata) {
-        return new DocumentSegment(id, knowledgeId, fileId, content, embedding, metadata);
+    public static DocumentSegment of(String id, String fileId, String content,
+                                     List<Float> embedding, Map<String, Object> metadata) {
+        return new DocumentSegment(id, fileId, content, embedding, metadata);
     }
 
     /**
-     * 从 Document 转换（需要从 metadata 中提取 knowledgeId 和 fileId）
+     * 从 Document 转换（从 metadata 中提取 fileId）
      */
     public static DocumentSegment fromDocument(Document document) {
         Map<String, Object> meta = document.getMetadata();
-        String knowledgeId = null;
         String fileId = null;
 
-        if (meta != null) {
-            if (meta.containsKey(FIELD_KNOWLEDGE_ID)) {
-                knowledgeId = String.valueOf(meta.get(FIELD_KNOWLEDGE_ID));
-            }
-            if (meta.containsKey(FIELD_FILE_ID)) {
-                fileId = String.valueOf(meta.get(FIELD_FILE_ID));
-            }
+        if (meta != null && meta.containsKey(FIELD_FILE_ID)) {
+            fileId = String.valueOf(meta.get(FIELD_FILE_ID));
         }
 
         return new DocumentSegment(
                 document.getId(),
-                knowledgeId,
                 fileId,
                 document.getContent(),
                 document.getEmbedding(),
@@ -182,34 +165,10 @@ public class DocumentSegment extends Document {
     // ==================== 过滤表达式构建方法 ====================
 
     /**
-     * 构建按知识库ID过滤的表达式
-     */
-    public static String filterByKnowledgeId(String knowledgeId) {
-        return String.format("%s == \"%s\"", FIELD_KNOWLEDGE_ID, knowledgeId);
-    }
-
-    /**
      * 构建按文档ID过滤的表达式
      */
     public static String filterByFileId(String fileId) {
         return String.format("%s == \"%s\"", FIELD_FILE_ID, fileId);
-    }
-
-    /**
-     * 构建按知识库ID和文档ID过滤的表达式
-     */
-    public static String filterByKnowledgeIdAndFileId(String knowledgeId, String fileId) {
-        return String.format("%s == \"%s\" && %s == \"%s\"",
-                FIELD_KNOWLEDGE_ID, knowledgeId, FIELD_FILE_ID, fileId);
-    }
-
-    /**
-     * 构建按多个知识库ID过滤的表达式（用于跨知识库搜索）
-     */
-    public static String filterByKnowledgeIds(List<String> knowledgeIds) {
-        return String.format("%s in [\"%s\"]",
-                FIELD_KNOWLEDGE_ID,
-                String.join("\", \"", knowledgeIds));
     }
 
     /**
@@ -219,6 +178,38 @@ public class DocumentSegment extends Document {
         return String.format("%s in [\"%s\"]",
                 FIELD_FILE_ID,
                 String.join("\", \"", fileIds));
+    }
+
+    // ==================== 分区相关方法 ====================
+
+    /**
+     * 根据知识库ID生成分区名称
+     * <p>
+     * 分区名称规则：partition_{knowledgeId}
+     * 注意：分区名称只能包含字母、数字和下划线
+     */
+    public static String getPartitionName(String knowledgeId) {
+        String safeName = knowledgeId.replaceAll("[^a-zA-Z0-9]", "_");
+        return "partition_" + safeName;
+    }
+
+    /**
+     * 从分区名称解析出知识库ID
+     */
+    public static String getKnowledgeIdFromPartition(String partitionName) {
+        if (partitionName != null && partitionName.startsWith("partition_")) {
+            return partitionName.substring("partition_".length());
+        }
+        return partitionName;
+    }
+
+    /**
+     * 根据多个知识库ID生成分区名称列表
+     */
+    public static List<String> getPartitionNames(List<String> knowledgeIds) {
+        return knowledgeIds.stream()
+                .map(DocumentSegment::getPartitionName)
+                .toList();
     }
 }
 
