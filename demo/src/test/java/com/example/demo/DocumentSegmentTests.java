@@ -146,13 +146,10 @@ class DocumentSegmentTests {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String filter = DocumentSegment.filterByFileId(FILE_1);
 
-        List<Document> results = vectorStore.query(filter, partition, 0, 100);
+        // 使用泛型 query 方法直接返回 DocumentSegment 类型
+        List<DocumentSegment> segments = vectorStore.query(filter, partition, 0, 100, DocumentSegment.class);
 
-        assertFalse(results.isEmpty());
-
-        List<DocumentSegment> segments = results.stream()
-                .map(DocumentSegment::fromDocument)
-                .toList();
+        assertFalse(segments.isEmpty());
 
         segments.forEach(s -> assertEquals(FILE_1, s.getFileId()));
         System.out.println("✅ 查询文档 " + FILE_1 + "，返回 " + segments.size() + " 条");
@@ -166,10 +163,11 @@ class DocumentSegmentTests {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String id = FILE_1 + "_0";
 
-        List<Document> results = vectorStore.getById(Collections.singletonList(id), partition);
+        // 使用泛型 getById 方法直接返回 DocumentSegment 类型
+        List<DocumentSegment> results = vectorStore.getById(Collections.singletonList(id), partition, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
-        DocumentSegment segment = DocumentSegment.fromDocument(results.get(0));
+        DocumentSegment segment = results.get(0);
 
         assertEquals(id, segment.getId());
         assertEquals(FILE_1, segment.getFileId());
@@ -177,6 +175,37 @@ class DocumentSegmentTests {
         System.out.println("✅ 获取成功: " + segment.getId());
         System.out.println("   fileId: " + segment.getFileId());
         System.out.println("   content: " + segment.getContent());
+    }
+
+    @Test
+    @Order(22)
+    @DisplayName("3.3 测试不同的泛型 query 重载方法")
+    void testGenericQueryMethods() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+        String filter = DocumentSegment.filterByFileId(FILE_1);
+
+        // 方式1: 只传 filter 和 class
+        List<DocumentSegment> result1 = vectorStore.query(filter, DocumentSegment.class);
+        System.out.println("✅ query(filter, class): 返回 " + result1.size() + " 条");
+
+        // 方式2: 传 filter, partition 和 class
+        List<DocumentSegment> result2 = vectorStore.query(filter, partition, DocumentSegment.class);
+        System.out.println("✅ query(filter, partition, class): 返回 " + result2.size() + " 条");
+
+        // 方式3: 传 filter, offset, limit 和 class
+        List<DocumentSegment> result3 = vectorStore.query(filter, 0, 10, DocumentSegment.class);
+        System.out.println("✅ query(filter, offset, limit, class): 返回 " + result3.size() + " 条");
+
+        // 方式4: 完整参数
+        List<DocumentSegment> result4 = vectorStore.query(filter, partition, 0, 10, DocumentSegment.class);
+        System.out.println("✅ query(filter, partition, offset, limit, class): 返回 " + result4.size() + " 条");
+
+        // 验证所有结果都能直接获取 fileId
+        assertFalse(result1.isEmpty());
+        result1.forEach(s -> {
+            assertNotNull(s.getFileId());
+            assertEquals(FILE_1, s.getFileId());
+        });
     }
 
     // ==================== 4. 文本搜索（自动嵌入查询）====================

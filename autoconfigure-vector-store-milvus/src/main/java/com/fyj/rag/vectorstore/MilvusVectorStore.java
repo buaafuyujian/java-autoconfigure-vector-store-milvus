@@ -117,9 +117,26 @@ public interface MilvusVectorStore {
     List<Document> getById(List<String> ids);
 
     /**
+     * 根据 ID 列表获取文档，返回指定类型
+     *
+     * @param ids ID 列表
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<T> getById(List<String> ids, Class<T> clazz);
+
+    /**
      * 根据 ID 列表从指定分区获取文档
      */
     List<Document> getById(List<String> ids, String partitionName);
+
+    /**
+     * 根据 ID 列表从指定分区获取文档，返回指定类型
+     *
+     * @param ids ID 列表
+     * @param partitionName 分区名
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<T> getById(List<String> ids, String partitionName, Class<T> clazz);
 
     /**
      * 根据过滤表达式查询文档
@@ -127,9 +144,26 @@ public interface MilvusVectorStore {
     List<Document> query(String filterExpression);
 
     /**
+     * 根据过滤表达式查询文档，返回指定类型
+     *
+     * @param filterExpression 过滤表达式
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<T> query(String filterExpression, Class<T> clazz);
+
+    /**
      * 根据过滤表达式从指定分区查询文档
      */
     List<Document> query(String filterExpression, String partitionName);
+
+    /**
+     * 根据过滤表达式从指定分区查询文档，返回指定类型
+     *
+     * @param filterExpression 过滤表达式
+     * @param partitionName 分区名
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<T> query(String filterExpression, String partitionName, Class<T> clazz);
 
     /**
      * 根据过滤表达式查询文档（带分页）
@@ -141,6 +175,16 @@ public interface MilvusVectorStore {
     List<Document> query(String filterExpression, int offset, int limit);
 
     /**
+     * 根据过滤表达式查询文档（带分页），返回指定类型
+     *
+     * @param filterExpression 过滤表达式
+     * @param offset 偏移量
+     * @param limit 限制数量
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<T> query(String filterExpression, int offset, int limit, Class<T> clazz);
+
+    /**
      * 根据过滤表达式从指定分区查询文档（带分页）
      *
      * @param filterExpression 过滤表达式
@@ -149,6 +193,17 @@ public interface MilvusVectorStore {
      * @param limit 限制数量
      */
     List<Document> query(String filterExpression, String partitionName, int offset, int limit);
+
+    /**
+     * 根据过滤表达式从指定分区查询文档（带分页），返回指定类型
+     *
+     * @param filterExpression 过滤表达式
+     * @param partitionName 分区名
+     * @param offset 偏移量
+     * @param limit 限制数量
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<T> query(String filterExpression, String partitionName, int offset, int limit, Class<T> clazz);
 
     // ==================== 向量搜索 - 全局 ====================
 

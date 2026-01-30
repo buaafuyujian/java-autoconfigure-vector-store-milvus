@@ -322,11 +322,21 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
     @Override
     public List<Document> getById(List<String> ids) {
-        return getById(ids, null);
+        return getById(ids, (String) null);
+    }
+
+    @Override
+    public <T extends Document> List<T> getById(List<String> ids, Class<T> clazz) {
+        return getById(ids, null, clazz);
     }
 
     @Override
     public List<Document> getById(List<String> ids, String partitionName) {
+        return getById(ids, partitionName, Document.class);
+    }
+
+    @Override
+    public <T extends Document> List<T> getById(List<String> ids, String partitionName, Class<T> clazz) {
         if (ids == null || ids.isEmpty()) {
             return Collections.emptyList();
         }
@@ -341,7 +351,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
             GetResp response = client.get(builder.build());
             return response.getGetResults().stream()
-                    .map(this::resultToDocument)
+                    .map(result -> resultToDocument(result, clazz))
                     .collect(Collectors.toList());
         } catch (Exception e) {
             throw new MilvusDataException(ErrorCode.DATA_QUERY_FAILED,
@@ -355,8 +365,18 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     @Override
+    public <T extends Document> List<T> query(String filterExpression, Class<T> clazz) {
+        return query(filterExpression, null, 0, 1000, clazz);
+    }
+
+    @Override
     public List<Document> query(String filterExpression, String partitionName) {
         return query(filterExpression, partitionName, 0, 1000);
+    }
+
+    @Override
+    public <T extends Document> List<T> query(String filterExpression, String partitionName, Class<T> clazz) {
+        return query(filterExpression, partitionName, 0, 1000, clazz);
     }
 
     @Override
@@ -365,7 +385,17 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     @Override
+    public <T extends Document> List<T> query(String filterExpression, int offset, int limit, Class<T> clazz) {
+        return query(filterExpression, null, offset, limit, clazz);
+    }
+
+    @Override
     public List<Document> query(String filterExpression, String partitionName, int offset, int limit) {
+        return query(filterExpression, partitionName, offset, limit, Document.class);
+    }
+
+    @Override
+    public <T extends Document> List<T> query(String filterExpression, String partitionName, int offset, int limit, Class<T> clazz) {
         try {
             QueryReq.QueryReqBuilder<?, ?> builder = QueryReq.builder()
                     .collectionName(collectionName)
@@ -379,7 +409,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
             QueryResp response = client.query(builder.build());
             return response.getQueryResults().stream()
-                    .map(this::queryResultToDocument)
+                    .map(result -> queryResultToDocument(result, clazz))
                     .collect(Collectors.toList());
         } catch (Exception e) {
             throw new MilvusDataException(ErrorCode.DATA_QUERY_FAILED,
@@ -614,9 +644,14 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         return entityToDocument(entity);
     }
 
-    private Document queryResultToDocument(QueryResp.QueryResult result) {
+    private <T extends Document> T resultToDocument(QueryResp.QueryResult result, Class<T> clazz) {
         Map<String, Object> entity = result.getEntity();
-        return entityToDocument(entity);
+        return entityToDocument(entity, clazz);
+    }
+
+    private <T extends Document> T queryResultToDocument(QueryResp.QueryResult result, Class<T> clazz) {
+        Map<String, Object> entity = result.getEntity();
+        return entityToDocument(entity, clazz);
     }
 
     private Document searchResultToDocument(SearchResp.SearchResult result) {
@@ -624,53 +659,14 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         return entityToDocument(entity);
     }
 
-    @SuppressWarnings("unchecked")
     private Document entityToDocument(Map<String, Object> entity) {
-        Document.DocumentBuilder<?, ?> builder = Document.builder();
+        return entityToDocument(entity, Document.class);
+    }
 
-        Object id = entity.get("id");
-        if (id != null) {
-            builder.id(id.toString());
-        }
-
-        Object content = entity.get("content");
-        if (content != null) {
-            builder.content(content.toString());
-        }
-
-        Object embedding = entity.get("embedding");
-        if (embedding instanceof List) {
-            builder.embedding((List<Float>) embedding);
-        }
-
-        // 处理 metadata
-        Map<String, Object> metadata = new HashMap<>();
-        Object metadataObj = entity.get("metadata");
-        if (metadataObj instanceof Map) {
-            metadata.putAll((Map<String, Object>) metadataObj);
-        } else if (metadataObj instanceof String) {
-            try {
-                Map<String, Object> metadataMap = GSON.fromJson((String) metadataObj, Map.class);
-                if (metadataMap != null) {
-                    metadata.putAll(metadataMap);
-                }
-            } catch (Exception ignored) {
-                // ignore json parse error
-            }
-        }
-
-        // 将其他字段也放入 metadata（用于子类扩展字段）
-        for (Map.Entry<String, Object> entry : entity.entrySet()) {
-            String key = entry.getKey();
-            if (!"id".equals(key) && !"content".equals(key)
-                    && !"embedding".equals(key) && !"metadata".equals(key)) {
-                metadata.put(key, entry.getValue());
-            }
-        }
-
-        builder.metadata(metadata);
-
-        return builder.build();
+    private <T extends Document> T entityToDocument(Map<String, Object> entity, Class<T> clazz) {
+        // 使用 Gson 直接将 entity 反序列化为指定类型
+        String json = GSON.toJson(entity);
+        return GSON.fromJson(json, clazz);
     }
 }
 
