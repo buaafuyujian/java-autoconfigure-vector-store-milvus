@@ -68,7 +68,7 @@ public interface MilvusVectorStore {
     /**
      * 添加文档到默认分区
      */
-    void add(List<Document> documents);
+    void add(List<? extends Document> documents);
 
     /**
      * 根据 ID 列表删除文档
@@ -85,7 +85,7 @@ public interface MilvusVectorStore {
     /**
      * 添加文档到指定分区
      */
-    void add(List<Document> documents, String partitionName);
+    void add(List<? extends Document> documents, String partitionName);
 
     /**
      * 根据 ID 列表从指定分区删除文档

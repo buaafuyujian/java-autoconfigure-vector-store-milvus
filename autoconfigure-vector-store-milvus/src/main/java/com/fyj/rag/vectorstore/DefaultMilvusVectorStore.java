@@ -189,7 +189,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     // ==================== 数据操作 - 默认分区 ====================
 
     @Override
-    public void add(List<Document> documents) {
+    public void add(List<? extends Document> documents) {
         add(documents, null);
     }
 
@@ -206,13 +206,13 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     // ==================== 数据操作 - 指定分区 ====================
 
     @Override
-    public void add(List<Document> documents, String partitionName) {
+    public void add(List<? extends Document> documents, String partitionName) {
         if (documents == null || documents.isEmpty()) {
             return;
         }
         try {
             // 自动嵌入：对没有 embedding 的文档进行向量化
-            List<Document> processedDocs = embedDocumentsIfNeeded(documents);
+            List<? extends Document> processedDocs = embedDocumentsIfNeeded(documents);
 
             List<JsonObject> data = processedDocs.stream()
                     .map(this::documentToJsonObject)
@@ -619,7 +619,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
      * <p>
      * 如果文档没有 embedding 且设置了 embeddingModel，则自动进行向量化
      */
-    private List<Document> embedDocumentsIfNeeded(List<Document> documents) {
+    private <T extends Document> List<T> embedDocumentsIfNeeded(List<T> documents) {
         if (embeddingModel == null) {
             return documents;
         }
@@ -651,10 +651,10 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         List<float[]> embeddingsList = embeddingModel.embed(texts);
 
         // 将嵌入向量设置回文档
-        List<Document> result = new ArrayList<>(documents);
+        List<T> result = new ArrayList<>(documents);
         for (int i = 0; i < indices.size(); i++) {
             int docIndex = indices.get(i);
-            Document originalDoc = result.get(docIndex);
+            T originalDoc = result.get(docIndex);
 
             // 提取该文档的向量
             float[] embeddingArray = embeddingsList.get(i);
