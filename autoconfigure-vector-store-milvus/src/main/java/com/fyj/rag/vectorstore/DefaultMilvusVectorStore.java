@@ -420,8 +420,14 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     // ==================== 向量搜索 - 全局 ====================
 
     @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public List<SearchResult> similaritySearch(SearchRequest request) {
-        return doSearch(request, null);
+        return (List) doSearch(request, null, Document.class);
+    }
+
+    @Override
+    public <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest request, Class<T> clazz) {
+        return doSearch(request, null, clazz);
     }
 
     @Override
@@ -437,8 +443,14 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     // ==================== 向量搜索 - 指定分区 ====================
 
     @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public List<SearchResult> similaritySearchInPartition(SearchRequest request, String partitionName) {
-        return doSearch(request, Collections.singletonList(partitionName));
+        return (List) doSearch(request, Collections.singletonList(partitionName), Document.class);
+    }
+
+    @Override
+    public <T extends Document> List<SearchResult<T>> similaritySearchInPartition(SearchRequest request, String partitionName, Class<T> clazz) {
+        return doSearch(request, Collections.singletonList(partitionName), clazz);
     }
 
     @Override
@@ -447,8 +459,14 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public List<SearchResult> similaritySearchInPartitions(SearchRequest request, List<String> partitionNames) {
-        return doSearch(request, partitionNames);
+        return (List) doSearch(request, partitionNames, Document.class);
+    }
+
+    @Override
+    public <T extends Document> List<SearchResult<T>> similaritySearchInPartitions(SearchRequest request, List<String> partitionNames, Class<T> clazz) {
+        return doSearch(request, partitionNames, clazz);
     }
 
     @Override
@@ -460,10 +478,16 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
     @Override
     public List<SearchResult> similaritySearch(String query, int topK) {
-        return similaritySearch(query, topK, null);
+        return similaritySearch(query, topK, (String) null);
     }
 
     @Override
+    public <T extends Document> List<SearchResult<T>> similaritySearch(String query, int topK, Class<T> clazz) {
+        return similaritySearch(query, topK, null, clazz);
+    }
+
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public List<SearchResult> similaritySearch(String query, int topK, String filter) {
         List<Float> vector = embedQuery(query);
         SearchRequest request = SearchRequest.builder()
@@ -471,28 +495,57 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
                 .topK(topK)
                 .filter(filter)
                 .build();
-        return doSearch(request, null);
+        return (List) doSearch(request, null, Document.class);
     }
 
     @Override
+    public <T extends Document> List<SearchResult<T>> similaritySearch(String query, int topK, String filter, Class<T> clazz) {
+        List<Float> vector = embedQuery(query);
+        SearchRequest request = SearchRequest.builder()
+                .vector(vector)
+                .topK(topK)
+                .filter(filter)
+                .build();
+        return doSearch(request, null, clazz);
+    }
+
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public List<SearchResult> similaritySearchInPartition(String query, int topK, String partitionName) {
         List<Float> vector = embedQuery(query);
-        return doSearch(SearchRequest.of(vector, topK), Collections.singletonList(partitionName));
+        return (List) doSearch(SearchRequest.of(vector, topK), Collections.singletonList(partitionName), Document.class);
     }
 
     @Override
-    public List<SearchResult> similaritySearchInPartitions(String query, int topK, List<String> partitionNames) {
+    public <T extends Document> List<SearchResult<T>> similaritySearchInPartition(String query, int topK, String partitionName, Class<T> clazz) {
         List<Float> vector = embedQuery(query);
-        return doSearch(SearchRequest.of(vector, topK), partitionNames);
+        return doSearch(SearchRequest.of(vector, topK), Collections.singletonList(partitionName), clazz);
     }
 
-    private List<SearchResult> doSearch(SearchRequest request, List<String> partitionNames) {
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public List<SearchResult> similaritySearchInPartitions(String query, int topK, List<String> partitionNames) {
+        List<Float> vector = embedQuery(query);
+        return (List) doSearch(SearchRequest.of(vector, topK), partitionNames, Document.class);
+    }
+
+    @Override
+    public <T extends Document> List<SearchResult<T>> similaritySearchInPartitions(String query, int topK, List<String> partitionNames, Class<T> clazz) {
+        List<Float> vector = embedQuery(query);
+        return doSearch(SearchRequest.of(vector, topK), partitionNames, clazz);
+    }
+
+    private <T extends Document> List<SearchResult<T>> doSearch(SearchRequest request, List<String> partitionNames, Class<T> clazz) {
         try {
+            // 获取需要返回的字段列表（排除 embedding 等带 @ExcludeField 注解的字段）
+            List<String> outputFields = Document.getOutputFields(clazz);
+
             SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
                     .collectionName(collectionName)
                     .annsField(request.getVectorFieldName())
                     .data(Collections.singletonList(new FloatVec(request.getVector())))
-                    .topK(request.getTopK());
+                    .topK(request.getTopK())
+                    .outputFields(outputFields);
 
             if (request.getFilter() != null && !request.getFilter().isEmpty()) {
                 builder.filter(request.getFilter());
@@ -512,10 +565,10 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
             SearchResp response = client.search(builder.build());
 
-            List<SearchResult> results = new ArrayList<>();
+            List<SearchResult<T>> results = new ArrayList<>();
             for (List<SearchResp.SearchResult> searchResults : response.getSearchResults()) {
                 for (SearchResp.SearchResult result : searchResults) {
-                    Document doc = searchResultToDocument(result);
+                    T doc = searchResultToDocument(result, clazz);
                     float score = result.getScore();
 
                     // 过滤相似度阈值
@@ -639,11 +692,6 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         return document.toJsonObject();
     }
 
-    private Document resultToDocument(QueryResp.QueryResult result) {
-        Map<String, Object> entity = result.getEntity();
-        return entityToDocument(entity);
-    }
-
     private <T extends Document> T resultToDocument(QueryResp.QueryResult result, Class<T> clazz) {
         Map<String, Object> entity = result.getEntity();
         return entityToDocument(entity, clazz);
@@ -654,14 +702,11 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         return entityToDocument(entity, clazz);
     }
 
-    private Document searchResultToDocument(SearchResp.SearchResult result) {
+    private <T extends Document> T searchResultToDocument(SearchResp.SearchResult result, Class<T> clazz) {
         Map<String, Object> entity = result.getEntity();
-        return entityToDocument(entity);
+        return entityToDocument(entity, clazz);
     }
 
-    private Document entityToDocument(Map<String, Object> entity) {
-        return entityToDocument(entity, Document.class);
-    }
 
     private <T extends Document> T entityToDocument(Map<String, Object> entity, Class<T> clazz) {
         // 使用 Gson 直接将 entity 反序列化为指定类型

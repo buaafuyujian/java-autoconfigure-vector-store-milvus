@@ -213,6 +213,14 @@ public interface MilvusVectorStore {
     List<SearchResult> similaritySearch(SearchRequest request);
 
     /**
+     * 向量相似度搜索，返回指定类型
+     *
+     * @param request 搜索请求
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest request, Class<T> clazz);
+
+    /**
      * 向量相似度搜索（简化版）
      */
     List<SearchResult> similaritySearch(List<Float> vector, int topK);
@@ -230,6 +238,15 @@ public interface MilvusVectorStore {
     List<SearchResult> similaritySearchInPartition(SearchRequest request, String partitionName);
 
     /**
+     * 在指定分区进行向量相似度搜索，返回指定类型
+     *
+     * @param request 搜索请求
+     * @param partitionName 分区名
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearchInPartition(SearchRequest request, String partitionName, Class<T> clazz);
+
+    /**
      * 在指定分区进行向量相似度搜索（简化版）
      */
     List<SearchResult> similaritySearchInPartition(List<Float> vector, int topK, String partitionName);
@@ -238,6 +255,15 @@ public interface MilvusVectorStore {
      * 在多个分区进行向量相似度搜索
      */
     List<SearchResult> similaritySearchInPartitions(SearchRequest request, List<String> partitionNames);
+
+    /**
+     * 在多个分区进行向量相似度搜索，返回指定类型
+     *
+     * @param request 搜索请求
+     * @param partitionNames 分区名列表
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearchInPartitions(SearchRequest request, List<String> partitionNames, Class<T> clazz);
 
     /**
      * 在多个分区进行向量相似度搜索（简化版）
@@ -258,9 +284,28 @@ public interface MilvusVectorStore {
     List<SearchResult> similaritySearch(String query, int topK);
 
     /**
+     * 使用文本进行相似度搜索，返回指定类型
+     *
+     * @param query 查询文本
+     * @param topK 返回数量
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearch(String query, int topK, Class<T> clazz);
+
+    /**
      * 使用文本进行相似度搜索（带过滤条件）
      */
     List<SearchResult> similaritySearch(String query, int topK, String filter);
+
+    /**
+     * 使用文本进行相似度搜索（带过滤条件），返回指定类型
+     *
+     * @param query 查询文本
+     * @param topK 返回数量
+     * @param filter 过滤条件
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearch(String query, int topK, String filter, Class<T> clazz);
 
     /**
      * 在指定分区使用文本进行相似度搜索
@@ -268,9 +313,29 @@ public interface MilvusVectorStore {
     List<SearchResult> similaritySearchInPartition(String query, int topK, String partitionName);
 
     /**
+     * 在指定分区使用文本进行相似度搜索，返回指定类型
+     *
+     * @param query 查询文本
+     * @param topK 返回数量
+     * @param partitionName 分区名
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearchInPartition(String query, int topK, String partitionName, Class<T> clazz);
+
+    /**
      * 在多个分区使用文本进行相似度搜索
      */
     List<SearchResult> similaritySearchInPartitions(String query, int topK, List<String> partitionNames);
+
+    /**
+     * 在多个分区使用文本进行相似度搜索，返回指定类型
+     *
+     * @param query 查询文本
+     * @param topK 返回数量
+     * @param partitionNames 分区名列表
+     * @param clazz 文档类型（Document 的子类）
+     */
+    <T extends Document> List<SearchResult<T>> similaritySearchInPartitions(String query, int topK, List<String> partitionNames, Class<T> clazz);
 
     // ==================== 数据管理 ====================
 

@@ -217,16 +217,18 @@ class DocumentSegmentTests {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
         // 直接使用文本搜索，VectorStore 会自动调用 EmbeddingModel 转换为向量
+        // 使用泛型方法直接返回 DocumentSegment 类型
         String query = "Java 编程语言";
-        List<SearchResult> results = vectorStore.similaritySearchInPartition(query, 3, partition);
+        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearchInPartition(query, 1, partition, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
 
         System.out.println("✅ 文本搜索 \"" + query + "\"，返回 " + results.size() + " 条:");
         results.forEach(r -> {
-            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
+            DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
             System.out.println("     content: " + seg.getContent());
+            System.out.println("     fileId: " + seg.getFileId());
         });
     }
 
@@ -236,14 +238,15 @@ class DocumentSegmentTests {
     void testTextSearchInMultiplePartitions() {
         List<String> partitions = DocumentSegment.getPartitionNames(Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
 
+        // 使用泛型方法直接返回 DocumentSegment 类型
         String query = "Spring Boot 框架";
-        List<SearchResult> results = vectorStore.similaritySearchInPartitions(query, 5, partitions);
+        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearchInPartitions(query, 5, partitions, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
 
         System.out.println("✅ 跨知识库搜索 \"" + query + "\"，返回 " + results.size() + " 条:");
         results.forEach(r -> {
-            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
+            DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " [" + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
         });
     }
@@ -253,14 +256,15 @@ class DocumentSegmentTests {
     @DisplayName("4.3 全局文本搜索")
     void testGlobalTextSearch() {
         String query = "人工智能技术";
-        List<SearchResult> results = vectorStore.similaritySearch(query, 5);
+        // 使用泛型方法直接返回 DocumentSegment 类型
+        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(query, 5, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
 
         System.out.println("✅ 全局搜索 \"" + query + "\"，返回 " + results.size() + " 条:");
         results.forEach(r -> {
-            DocumentSegment seg = DocumentSegment.fromDocument(r.getDocument());
-            System.out.println("   - " + seg.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            DocumentSegment seg = r.getDocument();
+            System.out.println("   - " + seg.getId() + " [fileId: " + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
         });
     }
 
