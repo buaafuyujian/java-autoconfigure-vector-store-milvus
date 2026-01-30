@@ -248,6 +248,7 @@ class DocumentSegmentTests {
         results.forEach(r -> {
             DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " [" + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + seg.getContent());
         });
     }
 
@@ -265,6 +266,7 @@ class DocumentSegmentTests {
         results.forEach(r -> {
             DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " [fileId: " + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + seg.getContent());
         });
     }
 
