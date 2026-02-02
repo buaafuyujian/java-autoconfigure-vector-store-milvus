@@ -12,7 +12,9 @@ import io.milvus.v2.service.partition.request.*;
 import io.milvus.v2.service.utility.request.CompactReq;
 import io.milvus.v2.service.utility.request.FlushReq;
 import io.milvus.v2.service.vector.request.*;
+import io.milvus.v2.service.vector.request.data.EmbeddedText;
 import io.milvus.v2.service.vector.request.data.FloatVec;
+import io.milvus.v2.service.vector.request.ranker.WeightedRanker;
 import io.milvus.v2.service.vector.response.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -25,7 +27,7 @@ import java.util.stream.Collectors;
  * <p>
  * 支持可选的 EmbeddingModel，当设置了 EmbeddingModel 时：
  * - add/upsert 时会自动对没有 embedding 的文档进行向量化
- * - similaritySearch 支持直接传入文本进行搜索
+ * - search 支持直接传入文本进行搜索
  */
 @Slf4j
 public class DefaultMilvusVectorStore implements MilvusVectorStore {
@@ -392,10 +394,27 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         }
     }
 
-    // ==================== 向量搜索（Spring AI 风格）====================
+    // ==================== 搜索操作（Spring AI 风格）====================
 
     @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest<T> request) {
+    public <T extends Document> List<SearchResult<T>> search(SearchRequest<T> request) {
+        switch (request.getSearchType()) {
+            case VECTOR:
+                return vectorSearch(request);
+            case BM25:
+                return bm25Search(request);
+            case HYBRID:
+                return hybridSearch(request);
+            default:
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "Unknown search type: " + request.getSearchType(), null);
+        }
+    }
+
+    /**
+     * 向量相似度搜索（ANN）
+     */
+    private <T extends Document> List<SearchResult<T>> vectorSearch(SearchRequest<T> request) {
         try {
             Class<T> clazz = request.getDocumentClass();
 
@@ -407,7 +426,7 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
             if (vector == null || vector.isEmpty()) {
                 throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
-                        "Search request must contain either vector or query text", null);
+                        "Vector search request must contain either vector or query text", null);
             }
 
             // 获取需要返回的字段列表（排除 embedding 等带 @ExcludeField 注解的字段）
@@ -442,25 +461,155 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
 
             SearchResp response = client.search(builder.build());
 
-            List<SearchResult<T>> results = new ArrayList<>();
-            for (List<SearchResp.SearchResult> searchResults : response.getSearchResults()) {
-                for (SearchResp.SearchResult result : searchResults) {
-                    T doc = searchResultToDocument(result, clazz);
-                    float score = result.getScore();
-
-                    // 过滤相似度阈值
-                    if (score >= request.getSimilarityThreshold()) {
-                        results.add(SearchResult.of(doc, score, score));
-                    }
-                }
-            }
-            return results;
+            return processSearchResults(response, clazz, request.getSimilarityThreshold());
         } catch (MilvusSearchException e) {
             throw e;
         } catch (Exception e) {
             throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
-                    "Failed to search in collection: " + collectionName, e);
+                    "Failed to perform vector search in collection: " + collectionName, e);
         }
+    }
+
+    /**
+     * BM25 全文检索
+     * <p>
+     * 使用 Milvus 的稀疏向量进行 BM25 搜索
+     */
+    private <T extends Document> List<SearchResult<T>> bm25Search(SearchRequest<T> request) {
+        try {
+            Class<T> clazz = request.getDocumentClass();
+
+            String query = request.getQuery();
+            if (query == null || query.isEmpty()) {
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "BM25 search request must contain query text", null);
+            }
+
+            // 获取需要返回的字段列表
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
+            }
+
+            // 构建 BM25 搜索请求，使用 EmbeddedText 进行稀疏向量搜索
+            SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
+                    .collectionName(collectionName)
+                    .annsField(request.getSparseVectorFieldName())
+                    .data(Collections.singletonList(new EmbeddedText(query)))
+                    .topK(request.getTopK())
+                    .outputFields(outputFields);
+
+            if (request.getFilter() != null && !request.getFilter().isEmpty()) {
+                builder.filter(request.getFilter());
+            }
+
+            if (request.getOffset() > 0) {
+                builder.offset(request.getOffset());
+            }
+
+            // 处理分区
+            if (request.hasPartitions()) {
+                builder.partitionNames(request.getPartitionNames());
+            }
+
+            SearchResp response = client.search(builder.build());
+
+            return processSearchResults(response, clazz, request.getSimilarityThreshold());
+        } catch (MilvusSearchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "Failed to perform BM25 search in collection: " + collectionName, e);
+        }
+    }
+
+    /**
+     * 混合搜索（向量 + BM25）
+     * <p>
+     * 结合向量相似度搜索和 BM25 全文检索，使用加权融合结果
+     */
+    private <T extends Document> List<SearchResult<T>> hybridSearch(SearchRequest<T> request) {
+        try {
+            Class<T> clazz = request.getDocumentClass();
+
+            String query = request.getQuery();
+            if (query == null || query.isEmpty()) {
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "Hybrid search request must contain query text", null);
+            }
+
+            // 处理向量：如果没有提供向量，则通过 embeddingModel 生成
+            List<Float> vector = request.getVector();
+            if (vector == null || vector.isEmpty()) {
+                vector = embedQuery(query);
+            }
+
+            // 获取需要返回的字段列表
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
+            }
+
+            // 构建向量搜索请求
+            AnnSearchReq vectorSearchReq = AnnSearchReq.builder()
+                    .vectorFieldName(request.getVectorFieldName())
+                    .vectors(Collections.singletonList(new FloatVec(vector)))
+                    .topK(request.getTopK())
+                    .build();
+
+            // 构建 BM25 搜索请求
+            AnnSearchReq bm25SearchReq = AnnSearchReq.builder()
+                    .vectorFieldName(request.getSparseVectorFieldName())
+                    .vectors(Collections.singletonList(new EmbeddedText(query)))
+                    .topK(request.getTopK())
+                    .build();
+
+            // 使用加权排序器（WeightedRanker）融合结果
+            List<Float> weights = Arrays.asList(request.getVectorWeight(), request.getBm25Weight());
+            WeightedRanker ranker = new WeightedRanker(weights);
+
+            // 构建混合搜索请求
+            HybridSearchReq.HybridSearchReqBuilder<?, ?> builder = HybridSearchReq.builder()
+                    .collectionName(collectionName)
+                    .searchRequests(Arrays.asList(vectorSearchReq, bm25SearchReq))
+                    .ranker(ranker)
+                    .topK(request.getTopK())
+                    .outFields(outputFields);
+
+            // 处理分区
+            if (request.hasPartitions()) {
+                builder.partitionNames(request.getPartitionNames());
+            }
+
+            SearchResp response = client.hybridSearch(builder.build());
+
+            return processSearchResults(response, clazz, request.getSimilarityThreshold());
+        } catch (MilvusSearchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "Failed to perform hybrid search in collection: " + collectionName, e);
+        }
+    }
+
+    /**
+     * 处理搜索结果，转换为 SearchResult 列表
+     */
+    private <T extends Document> List<SearchResult<T>> processSearchResults(
+            SearchResp response, Class<T> clazz, float similarityThreshold) {
+        List<SearchResult<T>> results = new ArrayList<>();
+        for (List<SearchResp.SearchResult> searchResults : response.getSearchResults()) {
+            for (SearchResp.SearchResult result : searchResults) {
+                T doc = searchResultToDocument(result, clazz);
+                float score = result.getScore();
+
+                // 过滤相似度阈值
+                if (score >= similarityThreshold) {
+                    results.add(SearchResult.of(doc, score, score));
+                }
+            }
+        }
+        return results;
     }
 
     // ==================== 数据管理 ====================

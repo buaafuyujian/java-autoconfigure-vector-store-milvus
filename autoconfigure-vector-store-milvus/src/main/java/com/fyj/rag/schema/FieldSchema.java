@@ -4,6 +4,8 @@ import io.milvus.v2.common.DataType;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.Map;
+
 /**
  * 字段 Schema 定义
  */
@@ -58,6 +60,21 @@ public class FieldSchema {
      */
     private Integer maxCapacity;
 
+    /**
+     * 是否启用分词器（用于 BM25 全文检索）
+     * <p>
+     * 当字段作为 BM25 Function 的输入时，必须设置为 true
+     */
+    @Builder.Default
+    private boolean enableAnalyzer = false;
+
+    /**
+     * 分词器参数
+     * <p>
+     * 可以指定分词器类型，如 {"type": "chinese"} 用于中文分词
+     */
+    private Map<String, Object> analyzerParams;
+
     // ========== 静态工厂方法 ==========
 
     /**
@@ -106,6 +123,42 @@ public class FieldSchema {
                 .name(name)
                 .dataType(DataType.VarChar)
                 .maxLength(maxLength)
+                .build();
+    }
+
+    /**
+     * 创建 VARCHAR 字段（启用分词器，用于 BM25 全文检索）
+     * <p>
+     * 当字段作为 BM25 Function 的输入时，必须启用分词器
+     *
+     * @param name      字段名称
+     * @param maxLength 最大长度
+     * @return FieldSchema
+     */
+    public static FieldSchema varcharWithAnalyzer(String name, int maxLength) {
+        return FieldSchema.builder()
+                .name(name)
+                .dataType(DataType.VarChar)
+                .maxLength(maxLength)
+                .enableAnalyzer(true)
+                .build();
+    }
+
+    /**
+     * 创建 VARCHAR 字段（启用分词器，指定分词器参数）
+     *
+     * @param name           字段名称
+     * @param maxLength      最大长度
+     * @param analyzerParams 分词器参数，如 Map.of("type", "chinese")
+     * @return FieldSchema
+     */
+    public static FieldSchema varcharWithAnalyzer(String name, int maxLength, Map<String, Object> analyzerParams) {
+        return FieldSchema.builder()
+                .name(name)
+                .dataType(DataType.VarChar)
+                .maxLength(maxLength)
+                .enableAnalyzer(true)
+                .analyzerParams(analyzerParams)
                 .build();
     }
 

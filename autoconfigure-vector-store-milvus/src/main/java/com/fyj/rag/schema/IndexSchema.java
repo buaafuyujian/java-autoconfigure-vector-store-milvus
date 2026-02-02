@@ -164,6 +164,64 @@ public class IndexSchema {
                 .build();
     }
 
+    // ========== 稀疏向量索引 ==========
+
+    /**
+     * 创建 SPARSE_INVERTED_INDEX 索引（稀疏倒排索引）
+     * <p>
+     * 适用于稀疏向量（如 BM25 生成的稀疏向量），使用 BM25 度量类型
+     *
+     * @param fieldName 字段名称
+     * @param dropRatioSearch 搜索时丢弃小值的比例（0.0 ~ 1.0），默认 0.0 表示不丢弃
+     */
+    public static IndexSchema sparseInvertedIndex(String fieldName, double dropRatioSearch) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("drop_ratio_search", dropRatioSearch);
+        return IndexSchema.builder()
+                .fieldName(fieldName)
+                .indexType(IndexParam.IndexType.SPARSE_INVERTED_INDEX)
+                .metricType(IndexParam.MetricType.BM25)
+                .extraParams(params)
+                .build();
+    }
+
+    /**
+     * 创建 SPARSE_INVERTED_INDEX 索引（稀疏倒排索引，默认参数）
+     *
+     * @param fieldName 字段名称
+     */
+    public static IndexSchema sparseInvertedIndex(String fieldName) {
+        return sparseInvertedIndex(fieldName, 0.0);
+    }
+
+    /**
+     * 创建 SPARSE_WAND 索引（稀疏 WAND 索引）
+     * <p>
+     * 适用于稀疏向量，使用 WAND 算法进行加速搜索
+     *
+     * @param fieldName 字段名称
+     * @param dropRatioSearch 搜索时丢弃小值的比例（0.0 ~ 1.0），默认 0.0 表示不丢弃
+     */
+    public static IndexSchema sparseWand(String fieldName, double dropRatioSearch) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("drop_ratio_search", dropRatioSearch);
+        return IndexSchema.builder()
+                .fieldName(fieldName)
+                .indexType(IndexParam.IndexType.SPARSE_WAND)
+                .metricType(IndexParam.MetricType.BM25)
+                .extraParams(params)
+                .build();
+    }
+
+    /**
+     * 创建 SPARSE_WAND 索引（稀疏 WAND 索引，默认参数）
+     *
+     * @param fieldName 字段名称
+     */
+    public static IndexSchema sparseWand(String fieldName) {
+        return sparseWand(fieldName, 0.0);
+    }
+
     /**
      * 转换为 Milvus SDK 的 IndexParam
      */

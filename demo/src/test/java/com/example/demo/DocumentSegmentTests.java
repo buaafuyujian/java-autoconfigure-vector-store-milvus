@@ -2,11 +2,13 @@ package com.example.demo;
 
 import com.example.demo.entity.DocumentSegment;
 import com.fyj.rag.client.MilvusClient;
+import com.fyj.rag.schema.IndexSchema;
 import com.fyj.rag.vectorstore.MilvusVectorStore;
 import com.fyj.rag.vectorstore.model.Document;
 import com.fyj.rag.vectorstore.model.SearchResult;
 import com.fyj.rag.vectorstore.request.QueryRequest;
 import com.fyj.rag.vectorstore.request.SearchRequest;
+import com.fyj.rag.vectorstore.request.SearchType;
 import org.junit.jupiter.api.*;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 特点：
  * 1. add/upsert 时不需要手动设置 embedding，VectorStore 会自动调用 EmbeddingModel
  * 2. 搜索时可以直接传入文本，VectorStore 会自动转换为向量
+ * 3. 支持向量搜索、BM25 全文检索、混合搜索三种搜索模式
  */
 @SpringBootTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -53,26 +56,28 @@ class DocumentSegmentTests {
 
     @Test
     @Order(1)
-    @DisplayName("1.1 初始化 Collection")
+    @DisplayName("1.1 初始化 Collection（支持 BM25）")
     void testInitCollection() {
         if (milvusClient.hasCollection(DocumentSegment.COLLECTION_NAME)) {
             milvusClient.releaseCollection(DocumentSegment.COLLECTION_NAME);
             milvusClient.dropCollection(DocumentSegment.COLLECTION_NAME);
         }
 
-        // 使用 EmbeddingModel 的维度创建 Schema
+        // 使用 EmbeddingModel 的维度创建支持 BM25 的 Schema
         int dimension = embeddingModel.dimensions();
         System.out.println("   EmbeddingModel 维度: " + dimension);
 
+        // 使用支持 BM25 的 Schema（包含 BM25 Function）
+        List<IndexSchema> indexes = DocumentSegment.createAllIndexes();
         milvusClient.createCollection(
                 DocumentSegment.COLLECTION_NAME,
-                DocumentSegment.createSchema(dimension),
-                DocumentSegment.createIndex()
+                DocumentSegment.createSchemaWithBM25(dimension),
+                indexes
         );
         milvusClient.loadCollection(DocumentSegment.COLLECTION_NAME);
 
         assertTrue(milvusClient.hasCollection(DocumentSegment.COLLECTION_NAME));
-        System.out.println("✅ Collection 创建成功: " + DocumentSegment.COLLECTION_NAME);
+        System.out.println("✅ Collection 创建成功（支持向量搜索 + BM25）: " + DocumentSegment.COLLECTION_NAME);
     }
 
     @Test
@@ -252,7 +257,7 @@ class DocumentSegmentTests {
                 .documentClass(DocumentSegment.class)
                 .build();
 
-        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+        List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
 
         assertFalse(results.isEmpty());
 
@@ -280,7 +285,7 @@ class DocumentSegmentTests {
                 .documentClass(DocumentSegment.class)
                 .build();
 
-        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+        List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
 
         assertFalse(results.isEmpty());
 
@@ -304,7 +309,7 @@ class DocumentSegmentTests {
                 .documentClass(DocumentSegment.class)
                 .build();
 
-        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+        List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
 
         assertFalse(results.isEmpty());
 
@@ -313,6 +318,182 @@ class DocumentSegmentTests {
             DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " [fileId: " + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
             System.out.println("     content: " + seg.getContent());
+        });
+    }
+
+    // ==================== 4.5 BM25 全文检索 ====================
+
+    @Test
+    @Order(33)
+    @DisplayName("4.4 BM25 全文检索")
+    void testBM25Search() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        // 使用 BM25 搜索类型
+        String queryText = "java";
+        SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
+                .query(queryText)
+                .searchType(SearchType.BM25)
+                .topK(5)
+                .inPartition(partition)
+                .documentClass(DocumentSegment.class)
+                .build();
+
+        List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
+
+        System.out.println("✅ BM25 搜索 \"" + queryText + "\"，返回 " + results.size() + " 条:");
+        results.forEach(r -> {
+            DocumentSegment seg = r.getDocument();
+            System.out.println("   - " + seg.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + seg.getContent());
+            System.out.println("     fileId: " + seg.getFileId());
+        });
+    }
+
+    @Test
+    @Order(34)
+    @DisplayName("4.5 BM25 搜索（使用便捷方法）")
+    void testBM25SearchWithConvenienceMethod() {
+        // 使用 SearchRequest.bm25() 便捷方法
+        String queryText = "Spring Boot 框架";
+        SearchRequest<Document> request = SearchRequest.bm25(queryText, 5);
+
+        List<SearchResult<Document>> results = vectorStore.search(request);
+
+        System.out.println("✅ BM25 便捷搜索 \"" + queryText + "\"，返回 " + results.size() + " 条:");
+        results.forEach(r -> {
+            Document doc = r.getDocument();
+            System.out.println("   - " + doc.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + doc.getContent());
+        });
+    }
+
+    // ==================== 4.6 混合搜索（向量 + BM25）====================
+
+    @Test
+    @Order(35)
+    @DisplayName("4.6 混合搜索（向量 + BM25）")
+    void testHybridSearch() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        // 使用混合搜索，向量权重 0.7，BM25 权重 0.3
+        String queryText = "人工智能 机器学习";
+        SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
+                .query(queryText)
+                .searchType(SearchType.HYBRID)
+                .vectorWeight(0.7f)
+                .bm25Weight(0.3f)
+                .topK(5)
+                .inPartition(partition)
+                .documentClass(DocumentSegment.class)
+                .build();
+
+        List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
+
+        System.out.println("✅ 混合搜索 \"" + queryText + "\"（向量:70% + BM25:30%），返回 " + results.size() + " 条:");
+        results.forEach(r -> {
+            DocumentSegment seg = r.getDocument();
+            System.out.println("   - " + seg.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + seg.getContent());
+            System.out.println("     fileId: " + seg.getFileId());
+        });
+    }
+
+    @Test
+    @Order(36)
+    @DisplayName("4.7 混合搜索（使用便捷方法）")
+    void testHybridSearchWithConvenienceMethod() {
+        // 使用 SearchRequest.hybrid() 便捷方法（默认权重各 50%）
+        String queryText = "深度学习 图像识别";
+        SearchRequest<Document> request = SearchRequest.hybrid(queryText, 5);
+
+        List<SearchResult<Document>> results = vectorStore.search(request);
+
+        System.out.println("✅ 混合便捷搜索 \"" + queryText + "\"（默认各50%），返回 " + results.size() + " 条:");
+        results.forEach(r -> {
+            Document doc = r.getDocument();
+            System.out.println("   - " + doc.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + doc.getContent());
+        });
+    }
+
+    @Test
+    @Order(37)
+    @DisplayName("4.8 混合搜索（自定义权重）")
+    void testHybridSearchWithCustomWeights() {
+        List<String> partitions = DocumentSegment.getPartitionNames(Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
+
+        // 使用自定义权重的混合搜索（向量 30% + BM25 70%）
+        String queryText = "编程语言 框架";
+        SearchRequest<Document> request = SearchRequest.hybrid(queryText, 5, 0.3f, 0.7f);
+
+        List<SearchResult<Document>> results = vectorStore.search(request);
+
+        System.out.println("✅ 混合搜索 \"" + queryText + "\"（向量:30% + BM25:70%），返回 " + results.size() + " 条:");
+        results.forEach(r -> {
+            Document doc = r.getDocument();
+            System.out.println("   - " + doc.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     content: " + doc.getContent());
+        });
+    }
+
+    @Test
+    @Order(38)
+    @DisplayName("4.9 对比三种搜索方式的结果")
+    void testCompareSearchMethods() {
+        String queryText = "人工智能";
+        int topK = 3;
+
+        System.out.println("✅ 对比三种搜索方式（查询: \"" + queryText + "\"）:");
+        System.out.println();
+
+        // 1. 向量搜索
+        SearchRequest<DocumentSegment> vectorReq = SearchRequest.<DocumentSegment>builder()
+                .query(queryText)
+                .searchType(SearchType.VECTOR)
+                .topK(topK)
+                .documentClass(DocumentSegment.class)
+                .build();
+        List<SearchResult<DocumentSegment>> vectorResults = vectorStore.search(vectorReq);
+
+        System.out.println("【向量搜索】返回 " + vectorResults.size() + " 条:");
+        vectorResults.forEach(r -> {
+            System.out.println("   - " + r.getDocument().getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     " + r.getDocument().getContent());
+        });
+        System.out.println();
+
+        // 2. BM25 搜索
+        SearchRequest<DocumentSegment> bm25Req = SearchRequest.<DocumentSegment>builder()
+                .query(queryText)
+                .searchType(SearchType.BM25)
+                .topK(topK)
+                .documentClass(DocumentSegment.class)
+                .build();
+        List<SearchResult<DocumentSegment>> bm25Results = vectorStore.search(bm25Req);
+
+        System.out.println("【BM25 搜索】返回 " + bm25Results.size() + " 条:");
+        bm25Results.forEach(r -> {
+            System.out.println("   - " + r.getDocument().getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     " + r.getDocument().getContent());
+        });
+        System.out.println();
+
+        // 3. 混合搜索
+        SearchRequest<DocumentSegment> hybridReq = SearchRequest.<DocumentSegment>builder()
+                .query(queryText)
+                .searchType(SearchType.HYBRID)
+                .vectorWeight(0.5f)
+                .bm25Weight(0.5f)
+                .topK(topK)
+                .documentClass(DocumentSegment.class)
+                .build();
+        List<SearchResult<DocumentSegment>> hybridResults = vectorStore.search(hybridReq);
+
+        System.out.println("【混合搜索】（各50%）返回 " + hybridResults.size() + " 条:");
+        hybridResults.forEach(r -> {
+            System.out.println("   - " + r.getDocument().getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
+            System.out.println("     " + r.getDocument().getContent());
         });
     }
 

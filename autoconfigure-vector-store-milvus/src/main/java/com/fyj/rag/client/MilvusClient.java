@@ -3,6 +3,7 @@ package com.fyj.rag.client;
 import com.fyj.rag.exception.*;
 import com.fyj.rag.schema.CollectionSchema;
 import com.fyj.rag.schema.FieldSchema;
+import com.fyj.rag.schema.FunctionSchema;
 import com.fyj.rag.schema.IndexSchema;
 import com.fyj.rag.vectorstore.DefaultMilvusVectorStore;
 import com.fyj.rag.vectorstore.MilvusVectorStore;
@@ -19,6 +20,7 @@ import io.milvus.v2.service.index.response.DescribeIndexResp;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
+import java.util.stream.Collectors;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -43,15 +45,24 @@ public class MilvusClient implements Closeable {
      * 创建 Collection（使用自定义 Schema）
      */
     public void createCollection(String collectionName, CollectionSchema schema) {
-        createCollection(collectionName, schema, null);
+        createCollection(collectionName, schema, (IndexSchema) null);
     }
 
     /**
      * 创建 Collection（使用自定义 Schema 和索引）
      */
     public void createCollection(String collectionName, CollectionSchema schema, IndexSchema indexSchema) {
+        createCollection(collectionName, schema, indexSchema != null ? Collections.singletonList(indexSchema) : null);
+    }
+
+    /**
+     * 创建 Collection（使用自定义 Schema 和多个索引）
+     * <p>
+     * 支持同时创建向量索引和稀疏向量索引，用于支持混合搜索
+     */
+    public void createCollection(String collectionName, CollectionSchema schema, List<IndexSchema> indexSchemas) {
         try {
-            // 构建 Schema
+            // 构建 Schema（包含 Functions）
             CreateCollectionReq.CollectionSchema milvusSchema = buildMilvusSchema(schema);
 
             CreateCollectionReq.CreateCollectionReqBuilder<?, ?> builder = CreateCollectionReq.builder()
@@ -63,10 +74,13 @@ public class MilvusClient implements Closeable {
             }
 
             // 添加索引参数
-            if (indexSchema != null) {
-                IndexParam indexParam = indexSchema.toIndexParam();
-                builder.indexParams(Collections.singletonList(indexParam));
+            if (indexSchemas != null && !indexSchemas.isEmpty()) {
+                List<IndexParam> indexParams = indexSchemas.stream()
+                        .map(IndexSchema::toIndexParam)
+                        .collect(Collectors.toList());
+                builder.indexParams(indexParams);
             }
+
 
             client.createCollection(builder.build());
             log.info("Created collection: {}", collectionName);
@@ -331,6 +345,14 @@ public class MilvusClient implements Closeable {
         }
         builder.fieldSchemaList(fieldSchemas);
 
+        // 添加 Functions（如 BM25）
+        if (schema.getFunctions() != null && !schema.getFunctions().isEmpty()) {
+            List<CreateCollectionReq.Function> functions = schema.getFunctions().stream()
+                    .map(FunctionSchema::toFunction)
+                    .collect(Collectors.toList());
+            builder.functionList(functions);
+        }
+
         return builder.build();
     }
 
@@ -360,6 +382,14 @@ public class MilvusClient implements Closeable {
 
         if (field.getMaxCapacity() != null) {
             builder.maxCapacity(field.getMaxCapacity());
+        }
+
+        // 分词器设置（用于 BM25 全文检索）
+        if (field.isEnableAnalyzer()) {
+            builder.enableAnalyzer(true);
+            if (field.getAnalyzerParams() != null && !field.getAnalyzerParams().isEmpty()) {
+                builder.analyzerParams(field.getAnalyzerParams());
+            }
         }
 
         return builder.build();

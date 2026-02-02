@@ -32,13 +32,13 @@ import java.util.List;
  *     .filter("category == 'tech'")
  *     .partitionNames(List.of("partition1"))
  *     .build();
- * List<SearchResult> results = vectorStore.similaritySearch(searchRequest);
+ * List<SearchResult> results = vectorStore.search(searchRequest);
  *
  * // 文本搜索示例（需要 EmbeddingModel）
  * SearchRequest textRequest = SearchRequest.query("什么是人工智能")
  *     .topK(5)
  *     .build();
- * List<SearchResult> results = vectorStore.similaritySearch(textRequest);
+ * List<SearchResult> results = vectorStore.search(textRequest);
  * }</pre>
  */
 public interface MilvusVectorStore {
@@ -264,36 +264,70 @@ public interface MilvusVectorStore {
         return query(QueryRequest.<T>builder().filter(filterExpression).documentClass(clazz).build());
     }
 
-    // ==================== 向量搜索（Spring AI 风格）====================
+    // ==================== 搜索操作（Spring AI 风格）====================
 
     /**
-     * 向量相似度搜索（泛型版本）
+     * 搜索文档（支持向量搜索、BM25搜索、混合搜索）
      * <p>
      * 这是推荐的搜索方式，支持向量/文本查询、过滤、分区、指定返回类型等所有功能
      * <p>
+     * 支持三种搜索类型：
+     * <ul>
+     *     <li>{@link com.fyj.rag.vectorstore.request.SearchType#VECTOR} - 向量相似度搜索（默认）</li>
+     *     <li>{@link com.fyj.rag.vectorstore.request.SearchType#BM25} - BM25 全文检索</li>
+     *     <li>{@link com.fyj.rag.vectorstore.request.SearchType#HYBRID} - 混合搜索（向量 + BM25）</li>
+     * </ul>
+     * <p>
      * 示例：
      * <pre>{@code
-     * // 文本搜索，指定返回类型
-     * SearchRequest<FaqDocument> request = SearchRequest.<FaqDocument>query("RAG 是什么")
+     * // 1. 文本搜索（向量相似度），指定返回类型
+     * SearchRequest<FaqDocument> request = SearchRequest.<FaqDocument>builder()
+     *     .query("RAG 是什么")
      *     .topK(10)
      *     .filter("type == 'faq'")
      *     .inPartition("knowledge_base")
-     *     .as(FaqDocument.class)
+     *     .documentClass(FaqDocument.class)
      *     .build();
-     * List<SearchResult<FaqDocument>> results = vectorStore.similaritySearch(request);
+     * List<SearchResult<FaqDocument>> results = vectorStore.search(request);
      *
-     * // 向量搜索
-     * SearchRequest<Document> request = SearchRequest.vector(queryVector)
+     * // 2. 向量搜索
+     * SearchRequest<Document> request = SearchRequest.<Document>builder()
+     *     .vector(queryVector)
      *     .topK(10)
-     *     .threshold(0.7f)
+     *     .similarityThreshold(0.7f)
      *     .build();
-     * List<SearchResult<Document>> results = vectorStore.similaritySearch(request);
+     * List<SearchResult<Document>> results = vectorStore.search(request);
+     *
+     * // 3. BM25 全文检索
+     * SearchRequest<Document> bm25Request = SearchRequest.<Document>builder()
+     *     .query("人工智能 机器学习")
+     *     .searchType(SearchType.BM25)
+     *     .textFieldName("content")
+     *     .topK(10)
+     *     .build();
+     * List<SearchResult<Document>> results = vectorStore.search(bm25Request);
+     *
+     * // 或使用便捷方法
+     * SearchRequest<Document> bm25Request = SearchRequest.bm25("人工智能", 10);
+     *
+     * // 4. 混合搜索（向量 + BM25）
+     * SearchRequest<Document> hybridRequest = SearchRequest.<Document>builder()
+     *     .query("什么是深度学习")
+     *     .searchType(SearchType.HYBRID)
+     *     .vectorWeight(0.7f)
+     *     .bm25Weight(0.3f)
+     *     .topK(10)
+     *     .build();
+     * List<SearchResult<Document>> results = vectorStore.search(hybridRequest);
+     *
+     * // 或使用便捷方法
+     * SearchRequest<Document> hybridRequest = SearchRequest.hybrid("深度学习", 10, 0.7f, 0.3f);
      * }</pre>
      *
-     * @param request 搜索请求（包含返回类型信息）
+     * @param request 搜索请求（包含搜索类型和返回类型信息）
      * @return 搜索结果列表
      */
-    <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest<T> request);
+    <T extends Document> List<SearchResult<T>> search(SearchRequest<T> request);
 
 
     // ==================== 数据管理 ====================

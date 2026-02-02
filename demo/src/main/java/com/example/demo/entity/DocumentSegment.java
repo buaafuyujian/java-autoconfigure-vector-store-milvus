@@ -11,6 +11,7 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,7 +57,13 @@ public class DocumentSegment extends Document {
 
     public DocumentSegment(String id, String fileId, String content,
                            List<Float> embedding, Map<String, Object> metadata) {
-        super(id, content, embedding, metadata != null ? metadata : new HashMap<>());
+        super(id, content, embedding, null, metadata != null ? metadata : new HashMap<>());
+        this.fileId = fileId;
+    }
+
+    public DocumentSegment(String id, String fileId, String content,
+                           List<Float> embedding, Map<Long, Float> sparse, Map<String, Object> metadata) {
+        super(id, content, embedding, sparse, metadata != null ? metadata : new HashMap<>());
         this.fileId = fileId;
     }
 
@@ -80,9 +87,41 @@ public class DocumentSegment extends Document {
                 .field(FieldSchema.varchar(FIELD_FILE_ID, 64))               // 文档ID
                 .field(FieldSchema.varchar(FIELD_CONTENT, 65535))            // 内容，最大65535字符
                 .field(FieldSchema.floatVector(FIELD_EMBEDDING, dimension))  // 向量
+                .field(FieldSchema.sparseFloatVector(FIELD_SPARSE))          // 稀疏向量
                 .field(FieldSchema.json(FIELD_METADATA))                     // 元数据
                 .enableDynamicField(false)
                 .build();
+    }
+
+    /**
+     * 创建支持 BM25 的 Collection Schema（带 BM25 Function）
+     * <p>
+     * 此 Schema 会自动将 content 字段转换为稀疏向量存储到 sparse 字段
+     * <p>
+     * 注意：content 字段使用 varcharWithAnalyzer 启用分词器，这是 BM25 Function 的要求
+     *
+     * @param dimension 向量维度
+     * @return CollectionSchema
+     */
+    public static CollectionSchema createSchemaWithBM25(int dimension) {
+        return CollectionSchema.create()
+                .description("Document segments for RAG knowledge base with BM25 support")
+                .field(FieldSchema.primaryKeyVarchar(FIELD_ID, 64))
+                .field(FieldSchema.varchar(FIELD_FILE_ID, 64))
+                .field(FieldSchema.varcharWithAnalyzer(FIELD_CONTENT, 65535))  // 启用分词器
+                .field(FieldSchema.floatVector(FIELD_EMBEDDING, dimension))
+                .field(FieldSchema.sparseFloatVector(FIELD_SPARSE))
+                .field(FieldSchema.json(FIELD_METADATA))
+                .bm25Function(FIELD_CONTENT, FIELD_SPARSE)  // BM25 Function: content -> sparse
+                .enableDynamicField(false)
+                .build();
+    }
+
+    /**
+     * 创建支持 BM25 的 Collection Schema（使用默认维度）
+     */
+    public static CollectionSchema createSchemaWithBM25() {
+        return createSchemaWithBM25(DEFAULT_DIMENSION);
     }
 
     /**
@@ -93,6 +132,27 @@ public class DocumentSegment extends Document {
     }
 
     /**
+     * 创建稀疏向量索引（用于 BM25 搜索）
+     */
+    public static IndexSchema createSparseIndex() {
+        return IndexSchema.sparseInvertedIndex(FIELD_SPARSE);
+    }
+
+    /**
+     * 创建所有索引（向量索引 + 稀疏向量索引）
+     * <p>
+     * 用于支持向量搜索、BM25搜索和混合搜索
+     *
+     * @return 索引列表
+     */
+    public static List<IndexSchema> createAllIndexes() {
+        List<IndexSchema> indexes = new ArrayList<>();
+        indexes.add(createIndex());       // 向量索引
+        indexes.add(createSparseIndex()); // 稀疏向量索引
+        return indexes;
+    }
+
+    /**
      * 创建 HNSW 索引（推荐用于高精度搜索）
      */
     public static IndexSchema createHnswIndex(int m, int efConstruction) {
@@ -100,10 +160,37 @@ public class DocumentSegment extends Document {
     }
 
     /**
+     * 创建 HNSW 索引 + 稀疏向量索引
+     *
+     * @param m              HNSW 参数
+     * @param efConstruction HNSW 参数
+     * @return 索引列表
+     */
+    public static List<IndexSchema> createHnswWithSparseIndexes(int m, int efConstruction) {
+        List<IndexSchema> indexes = new ArrayList<>();
+        indexes.add(createHnswIndex(m, efConstruction));
+        indexes.add(createSparseIndex());
+        return indexes;
+    }
+
+    /**
      * 创建 IVF_FLAT 索引（推荐用于大数据量）
      */
     public static IndexSchema createIvfFlatIndex(int nlist) {
         return IndexSchema.ivfFlat(FIELD_EMBEDDING, IndexParam.MetricType.COSINE, nlist);
+    }
+
+    /**
+     * 创建 IVF_FLAT 索引 + 稀疏向量索引
+     *
+     * @param nlist IVF 参数
+     * @return 索引列表
+     */
+    public static List<IndexSchema> createIvfFlatWithSparseIndexes(int nlist) {
+        List<IndexSchema> indexes = new ArrayList<>();
+        indexes.add(createIvfFlatIndex(nlist));
+        indexes.add(createSparseIndex());
+        return indexes;
     }
 
     // ==================== 静态工厂方法 ====================
@@ -139,6 +226,7 @@ public class DocumentSegment extends Document {
                 fileId,
                 document.getContent(),
                 document.getEmbedding(),
+                document.getSparse(),
                 meta
         );
     }

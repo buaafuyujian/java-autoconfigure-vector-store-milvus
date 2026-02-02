@@ -31,10 +31,24 @@ public class CollectionSchema {
     private boolean enableDynamicField = true;
 
     /**
+     * Function 列表（如 BM25）
+     */
+    @Builder.Default
+    private List<FunctionSchema> functions = new ArrayList<>();
+
+    /**
      * 添加字段
      */
     public CollectionSchema addField(FieldSchema field) {
         this.fields.add(field);
+        return this;
+    }
+
+    /**
+     * 添加 Function
+     */
+    public CollectionSchema addFunction(FunctionSchema function) {
+        this.functions.add(function);
         return this;
     }
 
@@ -84,6 +98,7 @@ public class CollectionSchema {
     public static class SchemaBuilder {
         private String description;
         private final List<FieldSchema> fields = new ArrayList<>();
+        private final List<FunctionSchema> functions = new ArrayList<>();
         private boolean enableDynamicField = true;
 
         public SchemaBuilder description(String description) {
@@ -111,8 +126,21 @@ public class CollectionSchema {
             return this;
         }
 
+        /**
+         * 添加 VARCHAR 字段（启用分词器，用于 BM25 全文检索）
+         */
+        public SchemaBuilder varcharWithAnalyzer(String name, int maxLength) {
+            this.fields.add(FieldSchema.varcharWithAnalyzer(name, maxLength));
+            return this;
+        }
+
         public SchemaBuilder floatVector(String name, int dimension) {
             this.fields.add(FieldSchema.floatVector(name, dimension));
+            return this;
+        }
+
+        public SchemaBuilder sparseFloatVector(String name) {
+            this.fields.add(FieldSchema.sparseFloatVector(name));
             return this;
         }
 
@@ -136,10 +164,42 @@ public class CollectionSchema {
             return this;
         }
 
+        /**
+         * 添加 Function
+         */
+        public SchemaBuilder function(FunctionSchema function) {
+            this.functions.add(function);
+            return this;
+        }
+
+        /**
+         * 添加 BM25 Function
+         *
+         * @param name           Function 名称
+         * @param inputFieldName 输入字段名称（文本字段）
+         * @param outputFieldName 输出字段名称（稀疏向量字段）
+         */
+        public SchemaBuilder bm25Function(String name, String inputFieldName, String outputFieldName) {
+            this.functions.add(FunctionSchema.bm25(name, inputFieldName, outputFieldName));
+            return this;
+        }
+
+        /**
+         * 添加 BM25 Function（使用默认名称）
+         *
+         * @param inputFieldName 输入字段名称（文本字段）
+         * @param outputFieldName 输出字段名称（稀疏向量字段）
+         */
+        public SchemaBuilder bm25Function(String inputFieldName, String outputFieldName) {
+            this.functions.add(FunctionSchema.bm25(inputFieldName, outputFieldName));
+            return this;
+        }
+
         public CollectionSchema build() {
             return CollectionSchema.builder()
                     .description(description)
                     .fields(fields)
+                    .functions(functions)
                     .enableDynamicField(enableDynamicField)
                     .build();
         }
