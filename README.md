@@ -65,7 +65,7 @@ milvus-test/
 <dependency>
     <groupId>com.fyj.rag</groupId>
     <artifactId>autoconfigure-vector-store-milvus</artifactId>
-    <version>1.1</version>
+    <version>1.2</version>
 </dependency>
 ```
 
