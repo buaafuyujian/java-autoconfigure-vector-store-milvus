@@ -7,6 +7,33 @@
     <groupId>io.github.buaafuyujian</groupId>
     <artifactId>autoconfigure-vector-store-milvus</artifactId>
     <version>1.3</version>
+    <packaging>jar</packaging>
+
+    <name>autoconfigure-vector-store-milvus</name>
+    <description>Spring Boot autoconfigure for Milvus Vector Store - 一个用于 Spring Boot 的 Milvus 向量数据库自动配置 Starter</description>
+    <url>https://github.com/buaafuyujian/java-autoconfigure-vector-store-milvus</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>fuyujian</id>
+            <name>fuyujian</name>
+            <email>hdufuyujian@gmail.com</email>
+        </developer>
+    </developers>
+
+    <scm>
+        <url>https://github.com/buaafuyujian/java-autoconfigure-vector-store-milvus</url>
+        <connection>scm:git:git://github.com/buaafuyujian/java-autoconfigure-vector-store-milvus.git</connection>
+        <developerConnection>scm:git:ssh://github.com/buaafuyujian/java-autoconfigure-vector-store-milvus.git</developerConnection>
+    </scm>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -67,5 +94,77 @@
         </repository>
     </repositories>
 
+    <distributionManagement>
+        <snapshotRepository>
+            <id>fyj</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        </snapshotRepository>
+        <repository>
+            <id>fyj</id>
+            <url>https://central.sonatype.com/</url>
+        </repository>
+    </distributionManagement>
+
+    <build>
+        <plugins>
+            <!-- Source Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.3.0</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Javadoc Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.6.3</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- GPG Signing Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Central Publishing Maven Plugin (新版 Sonatype 发布插件) -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.6.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>fyj</publishingServerId>
+                    <autoPublish>true</autoPublish>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>
