@@ -4,6 +4,8 @@ import com.example.demo.entity.DocumentSegment;
 import com.fyj.rag.client.MilvusClient;
 import com.fyj.rag.vectorstore.Document;
 import com.fyj.rag.vectorstore.MilvusVectorStore;
+import com.fyj.rag.vectorstore.QueryRequest;
+import com.fyj.rag.vectorstore.SearchRequest;
 import com.fyj.rag.vectorstore.SearchResult;
 import org.junit.jupiter.api.*;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -146,8 +148,15 @@ class DocumentSegmentTests {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String filter = DocumentSegment.filterByFileId(FILE_1);
 
-        // 使用泛型 query 方法直接返回 DocumentSegment 类型
-        List<DocumentSegment> segments = vectorStore.query(filter, partition, 0, 100, DocumentSegment.class);
+        // 使用 Spring AI 风格的 QueryRequest
+        QueryRequest request = QueryRequest.builder()
+                .filterExpression(filter)
+                .partitionName(partition)
+                .offset(0)
+                .limit(100)
+                .build();
+
+        List<DocumentSegment> segments = vectorStore.query(request, DocumentSegment.class);
 
         assertFalse(segments.isEmpty());
 
@@ -179,26 +188,42 @@ class DocumentSegmentTests {
 
     @Test
     @Order(22)
-    @DisplayName("3.3 测试不同的泛型 query 重载方法")
+    @DisplayName("3.3 测试 Spring AI 风格的 QueryRequest 用法")
     void testGenericQueryMethods() {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String filter = DocumentSegment.filterByFileId(FILE_1);
 
-        // 方式1: 只传 filter 和 class
+        // 方式1: 使用简单的便捷方法
         List<DocumentSegment> result1 = vectorStore.query(filter, DocumentSegment.class);
         System.out.println("✅ query(filter, class): 返回 " + result1.size() + " 条");
 
-        // 方式2: 传 filter, partition 和 class
-        List<DocumentSegment> result2 = vectorStore.query(filter, partition, DocumentSegment.class);
-        System.out.println("✅ query(filter, partition, class): 返回 " + result2.size() + " 条");
+        // 方式2: 使用静态工厂方法
+        QueryRequest request2 = QueryRequest.filter(filter);
+        List<DocumentSegment> result2 = vectorStore.query(request2, DocumentSegment.class);
+        System.out.println("✅ QueryRequest.filter(filter): 返回 " + result2.size() + " 条");
 
-        // 方式3: 传 filter, offset, limit 和 class
-        List<DocumentSegment> result3 = vectorStore.query(filter, 0, 10, DocumentSegment.class);
-        System.out.println("✅ query(filter, offset, limit, class): 返回 " + result3.size() + " 条");
+        // 方式3: 使用 Builder 指定分区
+        QueryRequest request3 = QueryRequest.builder()
+                .filterExpression(filter)
+                .partitionName(partition)
+                .build();
+        List<DocumentSegment> result3 = vectorStore.query(request3, DocumentSegment.class);
+        System.out.println("✅ QueryRequest with partition: 返回 " + result3.size() + " 条");
 
-        // 方式4: 完整参数
-        List<DocumentSegment> result4 = vectorStore.query(filter, partition, 0, 10, DocumentSegment.class);
-        System.out.println("✅ query(filter, partition, offset, limit, class): 返回 " + result4.size() + " 条");
+        // 方式4: 使用 Builder 完整参数（分区+分页）
+        QueryRequest request4 = QueryRequest.builder()
+                .filterExpression(filter)
+                .partitionName(partition)
+                .offset(0)
+                .limit(10)
+                .build();
+        List<DocumentSegment> result4 = vectorStore.query(request4, DocumentSegment.class);
+        System.out.println("✅ QueryRequest with pagination: 返回 " + result4.size() + " 条");
+
+        // 方式5: 使用静态工厂方法创建带分区的查询
+        QueryRequest request5 = QueryRequest.inPartition(filter, partition);
+        List<DocumentSegment> result5 = vectorStore.query(request5, DocumentSegment.class);
+        System.out.println("✅ QueryRequest.inPartition(): 返回 " + result5.size() + " 条");
 
         // 验证所有结果都能直接获取 fileId
         assertFalse(result1.isEmpty());
@@ -208,22 +233,27 @@ class DocumentSegmentTests {
         });
     }
 
-    // ==================== 4. 文本搜索（自动嵌入查询）====================
+    // ==================== 4. 文本搜索（Spring AI 风格 SearchRequest）====================
 
     @Test
     @Order(30)
-    @DisplayName("4.1 使用文本搜索（自动转换为向量）")
+    @DisplayName("4.1 使用文本搜索（SearchRequest 自动转换为向量）")
     void testTextSearch() {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
-        // 直接使用文本搜索，VectorStore 会自动调用 EmbeddingModel 转换为向量
-        // 使用泛型方法直接返回 DocumentSegment 类型
-        String query = "Java 编程语言";
-        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearchInPartition(query, 1, partition, DocumentSegment.class);
+        // 使用 Spring AI 风格的 SearchRequest
+        String queryText = "Java 编程语言";
+        SearchRequest request = SearchRequest.builder()
+                .query(queryText)
+                .topK(3)
+                .partitionNames(Collections.singletonList(partition))
+                .build();
+
+        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
 
-        System.out.println("✅ 文本搜索 \"" + query + "\"，返回 " + results.size() + " 条:");
+        System.out.println("✅ 文本搜索 \"" + queryText + "\"，返回 " + results.size() + " 条:");
         results.forEach(r -> {
             DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " (score: " + String.format("%.4f", r.getScore()) + ")");
@@ -238,13 +268,19 @@ class DocumentSegmentTests {
     void testTextSearchInMultiplePartitions() {
         List<String> partitions = DocumentSegment.getPartitionNames(Arrays.asList(KNOWLEDGE_1, KNOWLEDGE_2));
 
-        // 使用泛型方法直接返回 DocumentSegment 类型
-        String query = "Spring Boot 框架";
-        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearchInPartitions(query, 5, partitions, DocumentSegment.class);
+        // 使用 Spring AI 风格的 SearchRequest
+        String queryText = "Spring Boot 框架";
+        SearchRequest request = SearchRequest.builder()
+                .query(queryText)
+                .topK(5)
+                .partitionNames(partitions)
+                .build();
+
+        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
 
-        System.out.println("✅ 跨知识库搜索 \"" + query + "\"，返回 " + results.size() + " 条:");
+        System.out.println("✅ 跨知识库搜索 \"" + queryText + "\"，返回 " + results.size() + " 条:");
         results.forEach(r -> {
             DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " [" + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");
@@ -256,13 +292,18 @@ class DocumentSegmentTests {
     @Order(32)
     @DisplayName("4.3 全局文本搜索")
     void testGlobalTextSearch() {
-        String query = "人工智能技术";
-        // 使用泛型方法直接返回 DocumentSegment 类型
-        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(query, 5, DocumentSegment.class);
+        // 使用 Spring AI 风格的 SearchRequest
+        String queryText = "人工智能技术";
+        SearchRequest request = SearchRequest.builder()
+                .query(queryText)
+                .topK(5)
+                .build();
+
+        List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request, DocumentSegment.class);
 
         assertFalse(results.isEmpty());
 
-        System.out.println("✅ 全局搜索 \"" + query + "\"，返回 " + results.size() + " 条:");
+        System.out.println("✅ 全局搜索 \"" + queryText + "\"，返回 " + results.size() + " 条:");
         results.forEach(r -> {
             DocumentSegment seg = r.getDocument();
             System.out.println("   - " + seg.getId() + " [fileId: " + seg.getFileId() + "] (score: " + String.format("%.4f", r.getScore()) + ")");

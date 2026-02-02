@@ -360,51 +360,25 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     @Override
-    public List<Document> query(String filterExpression) {
-        return query(filterExpression, null, 0, 1000);
+    public List<Document> query(QueryRequest request) {
+        return query(request, Document.class);
     }
 
     @Override
-    public <T extends Document> List<T> query(String filterExpression, Class<T> clazz) {
-        return query(filterExpression, null, 0, 1000, clazz);
-    }
-
-    @Override
-    public List<Document> query(String filterExpression, String partitionName) {
-        return query(filterExpression, partitionName, 0, 1000);
-    }
-
-    @Override
-    public <T extends Document> List<T> query(String filterExpression, String partitionName, Class<T> clazz) {
-        return query(filterExpression, partitionName, 0, 1000, clazz);
-    }
-
-    @Override
-    public List<Document> query(String filterExpression, int offset, int limit) {
-        return query(filterExpression, null, offset, limit);
-    }
-
-    @Override
-    public <T extends Document> List<T> query(String filterExpression, int offset, int limit, Class<T> clazz) {
-        return query(filterExpression, null, offset, limit, clazz);
-    }
-
-    @Override
-    public List<Document> query(String filterExpression, String partitionName, int offset, int limit) {
-        return query(filterExpression, partitionName, offset, limit, Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<T> query(String filterExpression, String partitionName, int offset, int limit, Class<T> clazz) {
+    public <T extends Document> List<T> query(QueryRequest request, Class<T> clazz) {
         try {
             QueryReq.QueryReqBuilder<?, ?> builder = QueryReq.builder()
                     .collectionName(collectionName)
-                    .filter(filterExpression)
-                    .offset(offset)
-                    .limit(limit);
+                    .filter(request.getFilterExpression())
+                    .offset(request.getOffset())
+                    .limit(request.getLimit());
 
-            if (partitionName != null && !partitionName.isEmpty()) {
-                builder.partitionNames(Collections.singletonList(partitionName));
+            if (request.getPartitionName() != null && !request.getPartitionName().isEmpty()) {
+                builder.partitionNames(Collections.singletonList(request.getPartitionName()));
+            }
+
+            if (request.getOutputFields() != null && !request.getOutputFields().isEmpty()) {
+                builder.outputFields(request.getOutputFields());
             }
 
             QueryResp response = client.query(builder.build());
@@ -417,133 +391,42 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         }
     }
 
-    // ==================== 向量搜索 - 全局 ====================
+    // ==================== 向量搜索（Spring AI 风格）====================
 
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
     public List<SearchResult> similaritySearch(SearchRequest request) {
-        return (List) doSearch(request, null, Document.class);
+        return (List) doSearch(request, Document.class);
     }
 
     @Override
     public <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest request, Class<T> clazz) {
-        return doSearch(request, null, clazz);
+        return doSearch(request, clazz);
     }
 
-    @Override
-    public List<SearchResult> similaritySearch(List<Float> vector, int topK) {
-        return similaritySearch(SearchRequest.of(vector, topK));
-    }
-
-    @Override
-    public List<SearchResult> similaritySearch(List<Float> vector, int topK, String filter) {
-        return similaritySearch(SearchRequest.of(vector, topK, filter));
-    }
-
-    // ==================== 向量搜索 - 指定分区 ====================
-
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public List<SearchResult> similaritySearchInPartition(SearchRequest request, String partitionName) {
-        return (List) doSearch(request, Collections.singletonList(partitionName), Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearchInPartition(SearchRequest request, String partitionName, Class<T> clazz) {
-        return doSearch(request, Collections.singletonList(partitionName), clazz);
-    }
-
-    @Override
-    public List<SearchResult> similaritySearchInPartition(List<Float> vector, int topK, String partitionName) {
-        return similaritySearchInPartition(SearchRequest.of(vector, topK), partitionName);
-    }
-
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public List<SearchResult> similaritySearchInPartitions(SearchRequest request, List<String> partitionNames) {
-        return (List) doSearch(request, partitionNames, Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearchInPartitions(SearchRequest request, List<String> partitionNames, Class<T> clazz) {
-        return doSearch(request, partitionNames, clazz);
-    }
-
-    @Override
-    public List<SearchResult> similaritySearchInPartitions(List<Float> vector, int topK, List<String> partitionNames) {
-        return similaritySearchInPartitions(SearchRequest.of(vector, topK), partitionNames);
-    }
-
-    // ==================== 文本搜索（需要 EmbeddingModel）====================
-
-    @Override
-    public List<SearchResult> similaritySearch(String query, int topK) {
-        return similaritySearch(query, topK, (String) null);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearch(String query, int topK, Class<T> clazz) {
-        return similaritySearch(query, topK, null, clazz);
-    }
-
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public List<SearchResult> similaritySearch(String query, int topK, String filter) {
-        List<Float> vector = embedQuery(query);
-        SearchRequest request = SearchRequest.builder()
-                .vector(vector)
-                .topK(topK)
-                .filter(filter)
-                .build();
-        return (List) doSearch(request, null, Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearch(String query, int topK, String filter, Class<T> clazz) {
-        List<Float> vector = embedQuery(query);
-        SearchRequest request = SearchRequest.builder()
-                .vector(vector)
-                .topK(topK)
-                .filter(filter)
-                .build();
-        return doSearch(request, null, clazz);
-    }
-
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public List<SearchResult> similaritySearchInPartition(String query, int topK, String partitionName) {
-        List<Float> vector = embedQuery(query);
-        return (List) doSearch(SearchRequest.of(vector, topK), Collections.singletonList(partitionName), Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearchInPartition(String query, int topK, String partitionName, Class<T> clazz) {
-        List<Float> vector = embedQuery(query);
-        return doSearch(SearchRequest.of(vector, topK), Collections.singletonList(partitionName), clazz);
-    }
-
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public List<SearchResult> similaritySearchInPartitions(String query, int topK, List<String> partitionNames) {
-        List<Float> vector = embedQuery(query);
-        return (List) doSearch(SearchRequest.of(vector, topK), partitionNames, Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearchInPartitions(String query, int topK, List<String> partitionNames, Class<T> clazz) {
-        List<Float> vector = embedQuery(query);
-        return doSearch(SearchRequest.of(vector, topK), partitionNames, clazz);
-    }
-
-    private <T extends Document> List<SearchResult<T>> doSearch(SearchRequest request, List<String> partitionNames, Class<T> clazz) {
+    private <T extends Document> List<SearchResult<T>> doSearch(SearchRequest request, Class<T> clazz) {
         try {
+            // 处理文本查询：如果是文本查询，需要先转换为向量
+            List<Float> vector = request.getVector();
+            if (request.isTextQuery()) {
+                vector = embedQuery(request.getQuery());
+            }
+
+            if (vector == null || vector.isEmpty()) {
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "Search request must contain either vector or query text", null);
+            }
+
             // 获取需要返回的字段列表（排除 embedding 等带 @ExcludeField 注解的字段）
-            List<String> outputFields = Document.getOutputFields(clazz);
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
+            }
 
             SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
                     .collectionName(collectionName)
                     .annsField(request.getVectorFieldName())
-                    .data(Collections.singletonList(new FloatVec(request.getVector())))
+                    .data(Collections.singletonList(new FloatVec(vector)))
                     .topK(request.getTopK())
                     .outputFields(outputFields);
 
@@ -559,8 +442,9 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
                 builder.searchParams(request.getSearchParams());
             }
 
-            if (partitionNames != null && !partitionNames.isEmpty()) {
-                builder.partitionNames(partitionNames);
+            // 处理分区
+            if (request.hasPartitions()) {
+                builder.partitionNames(request.getPartitionNames());
             }
 
             SearchResp response = client.search(builder.build());
@@ -578,6 +462,8 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
                 }
             }
             return results;
+        } catch (MilvusSearchException e) {
+            throw e;
         } catch (Exception e) {
             throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
                     "Failed to search in collection: " + collectionName, e);
