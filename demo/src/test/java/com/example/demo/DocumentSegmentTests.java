@@ -330,7 +330,7 @@ class DocumentSegmentTests {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
         // 使用 BM25 搜索类型
-        String queryText = "java";
+        String queryText = "框架";
         SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
                 .query(queryText)
                 .searchType(SearchType.BM25)

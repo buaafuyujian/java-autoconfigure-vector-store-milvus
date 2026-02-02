@@ -141,6 +141,7 @@ public class FieldSchema {
                 .dataType(DataType.VarChar)
                 .maxLength(maxLength)
                 .enableAnalyzer(true)
+                .analyzerParams(Map.of("type","chinese"))  // 默认中文分词器
                 .build();
     }
 
