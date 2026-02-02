@@ -1,6 +1,10 @@
 package com.fyj.rag.vectorstore;
 
 import com.fyj.rag.exception.*;
+import com.fyj.rag.vectorstore.model.Document;
+import com.fyj.rag.vectorstore.model.SearchResult;
+import com.fyj.rag.vectorstore.request.QueryRequest;
+import com.fyj.rag.vectorstore.request.SearchRequest;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import io.milvus.v2.client.MilvusClientV2;

@@ -2,11 +2,11 @@ package com.example.demo;
 
 import com.example.demo.entity.DocumentSegment;
 import com.fyj.rag.client.MilvusClient;
-import com.fyj.rag.vectorstore.Document;
 import com.fyj.rag.vectorstore.MilvusVectorStore;
-import com.fyj.rag.vectorstore.QueryRequest;
-import com.fyj.rag.vectorstore.SearchRequest;
-import com.fyj.rag.vectorstore.SearchResult;
+import com.fyj.rag.vectorstore.model.Document;
+import com.fyj.rag.vectorstore.model.SearchResult;
+import com.fyj.rag.vectorstore.request.QueryRequest;
+import com.fyj.rag.vectorstore.request.SearchRequest;
 import org.junit.jupiter.api.*;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;

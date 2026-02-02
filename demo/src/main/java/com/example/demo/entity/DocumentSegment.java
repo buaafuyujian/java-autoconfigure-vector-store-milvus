@@ -3,7 +3,7 @@ package com.example.demo.entity;
 import com.fyj.rag.schema.CollectionSchema;
 import com.fyj.rag.schema.FieldSchema;
 import com.fyj.rag.schema.IndexSchema;
-import com.fyj.rag.vectorstore.Document;
+import com.fyj.rag.vectorstore.model.Document;
 import com.google.gson.annotations.SerializedName;
 import io.milvus.v2.common.IndexParam;
 import lombok.Data;

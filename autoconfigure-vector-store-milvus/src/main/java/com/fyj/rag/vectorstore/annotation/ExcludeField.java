@@ -1,4 +1,4 @@
-package com.fyj.rag.vectorstore;
+package com.fyj.rag.vectorstore.annotation;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

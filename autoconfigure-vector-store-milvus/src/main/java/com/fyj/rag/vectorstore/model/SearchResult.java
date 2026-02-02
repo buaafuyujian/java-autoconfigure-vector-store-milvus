@@ -1,4 +1,4 @@
-package com.fyj.rag.vectorstore;
+package com.fyj.rag.vectorstore.model;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

@@ -1,8 +1,9 @@
-package com.fyj.rag.vectorstore;
+package com.fyj.rag.vectorstore.model;
 
 import com.fyj.rag.schema.CollectionSchema;
 import com.fyj.rag.schema.FieldSchema;
 import com.fyj.rag.schema.IndexSchema;
+import com.fyj.rag.vectorstore.annotation.ExcludeField;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;

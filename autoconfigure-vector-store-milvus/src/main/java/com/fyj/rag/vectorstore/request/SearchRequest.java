@@ -1,5 +1,6 @@
-package com.fyj.rag.vectorstore;
+package com.fyj.rag.vectorstore.request;
 
+import com.fyj.rag.vectorstore.model.Document;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Singular;

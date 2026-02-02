@@ -1,5 +1,10 @@
 package com.fyj.rag.vectorstore;
 
+import com.fyj.rag.vectorstore.model.Document;
+import com.fyj.rag.vectorstore.model.SearchResult;
+import com.fyj.rag.vectorstore.request.QueryRequest;
+import com.fyj.rag.vectorstore.request.SearchRequest;
+
 import java.util.List;
 
 /**
