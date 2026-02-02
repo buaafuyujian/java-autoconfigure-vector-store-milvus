@@ -45,11 +45,16 @@ public class IndexSchema {
     /**
      * 创建 AUTOINDEX 索引（自动选择最优索引类型）
      */
-    public static IndexSchema autoIndex(String fieldName, IndexParam.MetricType metricType) {
+    public static IndexSchema autoIndex(String fieldName) {
         return IndexSchema.builder()
                 .fieldName(fieldName)
-                .indexType(IndexParam.IndexType.AUTOINDEX)
-                .metricType(metricType)
+                  .indexType(IndexParam.IndexType.HNSW)
+                  .metricType(IndexParam.MetricType.IP)
+                  .extraParams(Map.of(
+                          "M", 16,
+                          "efConstruction", 200,
+                          "normalize", true
+                  ))
                 .build();
     }
 

@@ -128,7 +128,7 @@ public class DocumentSegment extends Document {
      * 创建默认索引（AUTOINDEX + COSINE）
      */
     public static IndexSchema createIndex() {
-        return IndexSchema.autoIndex(FIELD_EMBEDDING, IndexParam.MetricType.COSINE);
+        return IndexSchema.autoIndex(FIELD_EMBEDDING);
     }
 
     /**
