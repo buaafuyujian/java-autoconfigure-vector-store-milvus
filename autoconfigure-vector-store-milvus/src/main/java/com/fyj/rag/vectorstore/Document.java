@@ -1,8 +1,12 @@
 package com.fyj.rag.vectorstore;
 
+import com.fyj.rag.schema.CollectionSchema;
+import com.fyj.rag.schema.FieldSchema;
+import com.fyj.rag.schema.IndexSchema;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
+import io.milvus.v2.common.IndexParam;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -55,6 +59,8 @@ public class Document {
     public static final String FIELD_CONTENT = "content";
     public static final String FIELD_EMBEDDING = "embedding";
     public static final String FIELD_METADATA = "metadata";
+    public static final Integer FIELD_ID_LENGTH=128;
+    public static final Integer FIELD_CONTENT_LENGTH=65535;
 
     /**
      * 创建文档
@@ -107,6 +113,54 @@ public class Document {
      */
     public JsonObject toJsonObject() {
         return GSON.toJsonTree(this).getAsJsonObject();
+    }
+
+    /**
+     * 创建 Collection Schema（自定义维度）
+     */
+    public static CollectionSchema createSchema(int dimension) {
+        return CollectionSchema.create()
+                               .description("Document segments for RAG knowledge base")
+                               .field(FieldSchema.primaryKeyVarchar(FIELD_ID, FIELD_ID_LENGTH))          // 主键
+                               .field(FieldSchema.varchar(FIELD_CONTENT, FIELD_CONTENT_LENGTH))            // 内容
+                               .field(FieldSchema.floatVector(FIELD_EMBEDDING, dimension))  // 向量
+                               .field(FieldSchema.json(FIELD_METADATA))                     // 元数据
+                               .enableDynamicField(false)
+                               .build();
+    }
+
+    /**
+     * 创建 Collection Schema（自定义维度）
+     */
+    public static CollectionSchema.SchemaBuilder createSchemaBuilder(int dimension) {
+        return CollectionSchema.create()
+                               .description("Document segments for RAG knowledge base")
+                               .field(FieldSchema.primaryKeyVarchar(FIELD_ID, FIELD_ID_LENGTH))          // 主键
+                               .field(FieldSchema.varchar(FIELD_CONTENT, FIELD_CONTENT_LENGTH))            // 内容
+                               .field(FieldSchema.floatVector(FIELD_EMBEDDING, dimension))  // 向量
+                               .field(FieldSchema.json(FIELD_METADATA))                     // 元数据
+                               .enableDynamicField(false);
+    }
+
+    /**
+     * 创建默认索引（AUTOINDEX + COSINE）
+     */
+    public static IndexSchema createIndex() {
+        return IndexSchema.autoIndex(FIELD_EMBEDDING, IndexParam.MetricType.COSINE);
+    }
+
+    /**
+     * 创建 HNSW 索引（推荐用于高精度搜索）
+     */
+    public static IndexSchema createHnswIndex(int m, int efConstruction) {
+        return IndexSchema.hnsw(FIELD_EMBEDDING, IndexParam.MetricType.COSINE, m, efConstruction);
+    }
+
+    /**
+     * 创建 IVF_FLAT 索引（推荐用于大数据量）
+     */
+    public static IndexSchema createIvfFlatIndex(int nlist) {
+        return IndexSchema.ivfFlat(FIELD_EMBEDDING, IndexParam.MetricType.COSINE, nlist);
     }
 
     /**
