@@ -11,9 +11,11 @@
 - 🚀 **Spring Boot 自动配置** - 零配置开箱即用
 - 🎯 **泛型支持** - 查询和搜索直接返回自定义 Document 子类
 - 📦 **分区管理** - 支持按知识库/租户分区存储
-- 🔍 **多种搜索方式** - 支持向量搜索、文本搜索（自动嵌入）、过滤查询
+- 🔍 **多种搜索方式** - 支持向量搜索、BM25 全文检索、混合搜索
 - 🔧 **灵活的 Schema** - 提供流式 API 创建自定义 Collection Schema
 - 🤖 **Spring AI 集成** - 可选集成 EmbeddingModel 自动向量化
+- 📝 **BM25 全文检索** - 支持基于关键词的全文检索
+- ⚡ **混合搜索** - 结合向量语义搜索和 BM25 关键词搜索，可自定义权重
 
 ## 📁 项目结构
 
@@ -35,15 +37,20 @@ milvus-test/
 │   │   ├── schema/                       # Schema 定义
 │   │   │   ├── CollectionSchema.java
 │   │   │   ├── FieldSchema.java
-│   │   │   └── IndexSchema.java
+│   │   │   ├── IndexSchema.java
+│   │   │   └── FunctionSchema.java       # BM25 Function 定义
 │   │   └── vectorstore/                  # 向量存储核心
 │   │       ├── MilvusVectorStore.java    # 接口定义
 │   │       ├── DefaultMilvusVectorStore.java
-│   │       ├── Document.java             # 文档实体基类
-│   │       ├── QueryRequest.java         # 查询请求（泛型，含返回类型）
-│   │       ├── SearchRequest.java        # 搜索请求（泛型，含返回类型）
-│   │       ├── SearchResult.java
-│   │       └── ExcludeField.java         # 排除字段注解
+│   │       ├── model/
+│   │       │   ├── Document.java         # 文档实体基类
+│   │       │   └── SearchResult.java
+│   │       ├── request/
+│   │       │   ├── QueryRequest.java     # 查询请求（泛型）
+│   │       │   ├── SearchRequest.java    # 搜索请求（泛型，支持多种搜索类型）
+│   │       │   └── SearchType.java       # 搜索类型枚举（VECTOR/BM25/HYBRID）
+│   │       └── annotation/
+│   │           └── ExcludeField.java     # 排除字段注解
 │   └── pom.xml
 ├── demo/                                  # 示例项目
 │   ├── src/
@@ -113,7 +120,7 @@ public class VectorService {
             .query(query)
             .topK(topK)
             .build();
-        return vectorStore.similaritySearch(request);
+        return vectorStore.search(request);
     }
 }
 ```
@@ -179,7 +186,7 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .inPartition("knowledge_base_001")
     .documentClass(DocumentSegment.class)
     .build();
-vectorStore.similaritySearch(request);
+vectorStore.search(request);
 
 // 在多个分区搜索（使用 @Singular）
 SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
@@ -189,7 +196,7 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .inPartition("kb_002")
     .documentClass(DocumentSegment.class)
     .build();
-vectorStore.similaritySearch(request);
+vectorStore.search(request);
 ```
 
 ## 🔍 查询与搜索（泛型 Request）
@@ -234,10 +241,13 @@ List<DocumentSegment> segments = vectorStore.getById(
 
 ### SearchRequest - 向量相似度搜索
 
-使用泛型 `SearchRequest<T>` 进行向量搜索：
+使用泛型 `SearchRequest<T>` 进行向量搜索，支持三种搜索类型：
+- **VECTOR** - 向量相似度搜索（默认）
+- **BM25** - BM25 全文检索
+- **HYBRID** - 混合搜索（向量 + BM25）
 
 ```java
-// 方式1: 使用向量搜索
+// 方式1: 使用向量搜索（默认）
 List<Float> queryVector = embeddingModel.embed("查询文本");
 SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .vector(queryVector)
@@ -246,7 +256,7 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .similarityThreshold(0.7f)
     .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
 
 // 方式2: 使用 @Singular 添加多个分区
 SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
@@ -263,6 +273,54 @@ results.forEach(r -> {
     float score = r.getScore();
     System.out.println(doc.getFileId() + ": " + score);
 });
+```
+
+### BM25 全文检索
+
+BM25 是一种基于关键词匹配的全文检索算法，适用于精确关键词匹配场景：
+
+```java
+// 方式1: 使用 Builder
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
+    .query("Java 编程 Spring Boot")
+    .searchType(SearchType.BM25)
+    .topK(10)
+    .documentClass(DocumentSegment.class)
+    .build();
+List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
+
+// 方式2: 使用便捷静态方法
+SearchRequest<Document> request = SearchRequest.bm25("人工智能 机器学习", 10);
+List<SearchResult<Document>> results = vectorStore.search(request);
+
+// 方式3: 指定文本字段名（默认为 "content"）
+SearchRequest<Document> request = SearchRequest.bm25("深度学习", 10, "content");
+List<SearchResult<Document>> results = vectorStore.search(request);
+```
+
+### 混合搜索（向量 + BM25）
+
+混合搜索结合向量语义搜索和 BM25 关键词搜索，通过加权融合获得更好的搜索效果：
+
+```java
+// 方式1: 使用 Builder，自定义权重（向量 70% + BM25 30%）
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
+    .query("什么是深度学习")
+    .searchType(SearchType.HYBRID)
+    .vectorWeight(0.7f)    // 向量搜索权重
+    .bm25Weight(0.3f)      // BM25 搜索权重
+    .topK(10)
+    .documentClass(DocumentSegment.class)
+    .build();
+List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
+
+// 方式2: 使用便捷方法（默认各 50% 权重）
+SearchRequest<Document> request = SearchRequest.hybrid("人工智能技术", 10);
+List<SearchResult<Document>> results = vectorStore.search(request);
+
+// 方式3: 使用便捷方法，自定义权重
+SearchRequest<Document> request = SearchRequest.hybrid("机器学习算法", 10, 0.6f, 0.4f);
+List<SearchResult<Document>> results = vectorStore.search(request);
 ```
 
 ### 文本搜索（自动嵌入）
@@ -282,7 +340,7 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .topK(10)
     .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
 
 // 方式2: 在指定分区搜索
 SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
@@ -301,14 +359,14 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .similarityThreshold(0.6f)
     .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+List<SearchResult<DocumentSegment>> results = vectorStore.search(request);
 
 // 默认返回 Document 类型（不指定 documentClass）
 SearchRequest<Document> request = SearchRequest.<Document>builder()
     .query("问题")
     .topK(5)
     .build();
-List<SearchResult<Document>> results = vectorStore.similaritySearch(request);
+List<SearchResult<Document>> results = vectorStore.search(request);
 ```
 
 ## 🏗️ Schema 管理
@@ -339,9 +397,46 @@ IndexSchema index = IndexSchema.hnsw("embedding", MetricType.COSINE, 16, 256);
 milvusClient.createCollection("my_collection", schema, index);
 ```
 
+### 创建支持 BM25 的 Collection
+
+要支持 BM25 全文检索和混合搜索，需要：
+1. 为文本字段启用分词器（`enableAnalyzer`）
+2. 添加稀疏向量字段（`sparseFloatVector`）
+3. 添加 BM25 Function
+4. 为稀疏向量字段创建索引
+
+```java
+// 方式1: 使用 Document 的便捷方法
+CollectionSchema schema = Document.createSchemaWithBM25(1536);
+List<IndexSchema> indexes = Document.createAllIndexes();
+milvusClient.createCollection("my_collection", schema, indexes);
+
+// 方式2: 使用自定义 Schema（完整控制）
+CollectionSchema schema = CollectionSchema.create()
+    .description("Collection with BM25 support")
+    .field(FieldSchema.primaryKeyVarchar("id", 64))
+    .field(FieldSchema.varcharWithAnalyzer("content", 65535))  // 启用分词器
+    .field(FieldSchema.floatVector("embedding", 1536))
+    .field(FieldSchema.sparseFloatVector("sparse"))            // 稀疏向量字段
+    .field(FieldSchema.json("metadata"))
+    .bm25Function("content", "sparse")  // BM25 Function: content -> sparse
+    .enableDynamicField(false)
+    .build();
+
+// 创建索引（向量索引 + 稀疏向量索引）
+List<IndexSchema> indexes = Arrays.asList(
+    IndexSchema.autoIndex("embedding", MetricType.COSINE),
+    IndexSchema.sparseInvertedIndex("sparse")
+);
+
+milvusClient.createCollection("my_collection", schema, indexes);
+milvusClient.loadCollection("my_collection");
+```
+
 ### 索引类型
 
 ```java
+// ====== 向量索引 ======
 // AUTOINDEX（推荐，Milvus 自动选择最佳索引）
 IndexSchema.autoIndex("embedding", MetricType.COSINE);
 
@@ -353,6 +448,16 @@ IndexSchema.ivfFlat("embedding", MetricType.COSINE, 1024);
 
 // IVF_SQ8（压缩索引，节省内存）
 IndexSchema.ivfSq8("embedding", MetricType.COSINE, 1024);
+
+// ====== 稀疏向量索引（用于 BM25）======
+// SPARSE_INVERTED_INDEX（稀疏倒排索引）
+IndexSchema.sparseInvertedIndex("sparse");
+
+// SPARSE_WAND（稀疏 WAND 索引，更快的搜索速度）
+IndexSchema.sparseWand("sparse");
+
+// 指定 drop_ratio_search 参数
+IndexSchema.sparseInvertedIndex("sparse", 0.2);  // 丢弃 20% 的小值
 ```
 
 ## ⚙️ 配置参考
@@ -399,7 +504,7 @@ List<Document> query(String filterExpression);                    // 便捷方�
 <T extends Document> List<T> query(String filterExpression, Class<T> clazz);  // 便捷方法
 
 // ====== 向量搜索（泛型 Request）======
-<T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest<T> request);
+<T extends Document> List<SearchResult<T>> search(SearchRequest<T> request);
 
 // ====== 分区管理 ======
 void createPartition(String partitionName);
@@ -445,13 +550,22 @@ QueryRequest<DocumentSegment> request = QueryRequest.<DocumentSegment>builder()
 SearchRequest.of(List<Float> vector, int topK);           // 向量搜索
 SearchRequest.of(List<Float> vector, int topK, String filter);
 SearchRequest.of(String query, int topK);                 // 文本搜索
+SearchRequest.bm25(String query, int topK);               // BM25 搜索
+SearchRequest.bm25(String query, int topK, String textFieldName);
+SearchRequest.hybrid(String query, int topK);             // 混合搜索（默认各 50%）
+SearchRequest.hybrid(String query, int topK, float vectorWeight, float bm25Weight);
 SearchRequest.<T>builder();                               // Builder
 
 // Builder 方法（Lombok @Builder + @Singular 生成）
 SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .query("搜索文本")                       // 文本查询（与 vector 二选一）
     .vector(queryVector)                    // 向量查询（与 query 二选一）
+    .searchType(SearchType.VECTOR)          // 搜索类型: VECTOR/BM25/HYBRID
     .vectorFieldName("embedding")           // 向量字段名，默认 "embedding"
+    .sparseVectorFieldName("sparse")        // 稀疏向量字段名，默认 "sparse"
+    .textFieldName("content")               // 文本字段名，默认 "content"
+    .vectorWeight(0.7f)                     // 混合搜索：向量权重，默认 0.5
+    .bm25Weight(0.3f)                       // 混合搜索：BM25 权重，默认 0.5
     .topK(10)                               // 返回数量，默认 10
     .filter("field == 'value'")             // 过滤表达式（可选）
     .inPartition("partition1")              // @Singular: 添加分区
@@ -466,6 +580,20 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .build();
 ```
 
+### SearchType 枚举
+
+```java
+public enum SearchType {
+    VECTOR,   // 向量相似度搜索（默认）
+    BM25,     // BM25 全文检索
+    HYBRID    // 混合搜索（向量 + BM25）
+}
+
+// 从字符串转换
+SearchType type = SearchType.fromString("bm25");  // 大小写不敏感
+SearchType type = SearchType.fromString("unknown", SearchType.VECTOR);  // 带默认值
+```
+
 ### 核心用法示例
 
 ```java
@@ -476,13 +604,21 @@ QueryRequest<DocumentSegment> qr = QueryRequest.<DocumentSegment>builder()
     .build();
 List<DocumentSegment> docs = vectorStore.query(qr);
 
-// 搜索：类型在 Request 中指定，无需额外传参  
+// 向量搜索：类型在 Request 中指定，无需额外传参  
 SearchRequest<DocumentSegment> sr = SearchRequest.<DocumentSegment>builder()
     .query("RAG 是什么")
     .topK(5)
     .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(sr);
+List<SearchResult<DocumentSegment>> results = vectorStore.search(sr);
+
+// BM25 全文检索
+SearchRequest<Document> bm25Req = SearchRequest.bm25("人工智能 机器学习", 10);
+List<SearchResult<Document>> bm25Results = vectorStore.search(bm25Req);
+
+// 混合搜索（向量 70% + BM25 30%）
+SearchRequest<Document> hybridReq = SearchRequest.hybrid("深度学习技术", 10, 0.7f, 0.3f);
+List<SearchResult<Document>> hybridResults = vectorStore.search(hybridReq);
 ```
 
 ### MilvusClient 接口
@@ -491,6 +627,7 @@ List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(sr);
 // ====== Collection 管理 ======
 void createCollection(String name, CollectionSchema schema);
 void createCollection(String name, CollectionSchema schema, IndexSchema index);
+void createCollection(String name, CollectionSchema schema, List<IndexSchema> indexes);  // 支持多索引
 void dropCollection(String name);
 boolean hasCollection(String name);
 List<String> listCollections();
