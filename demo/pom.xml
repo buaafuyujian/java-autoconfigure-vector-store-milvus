@@ -39,7 +39,7 @@
         <dependency>
             <groupId>io.github.buaafuyujian</groupId>
             <artifactId>autoconfigure-vector-store-milvus</artifactId>
-            <version>1.3</version>
+            <version>1.4</version>
         </dependency>
 
         <!-- Lombok -->
