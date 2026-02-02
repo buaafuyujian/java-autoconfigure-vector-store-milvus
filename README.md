@@ -40,8 +40,8 @@ milvus-test/
 │   │       ├── MilvusVectorStore.java    # 接口定义
 │   │       ├── DefaultMilvusVectorStore.java
 │   │       ├── Document.java             # 文档实体基类
-│   │       ├── QueryRequest.java         # 查询请求（Spring AI 风格）
-│   │       ├── SearchRequest.java        # 搜索请求（Spring AI 风格）
+│   │       ├── QueryRequest.java         # 查询请求（泛型，含返回类型）
+│   │       ├── SearchRequest.java        # 搜索请求（泛型，含返回类型）
 │   │       ├── SearchResult.java
 │   │       └── ExcludeField.java         # 排除字段注解
 │   └── pom.xml
@@ -107,9 +107,9 @@ public class VectorService {
         vectorStore.add(documents);
     }
 
-    public List<SearchResult> search(String query, int topK) {
-        // 使用 Spring AI 风格的 SearchRequest
-        SearchRequest request = SearchRequest.builder()
+    public List<SearchResult<Document>> search(String query, int topK) {
+        // 使用泛型 SearchRequest（Lombok Builder）
+        SearchRequest<Document> request = SearchRequest.<Document>builder()
             .query(query)
             .topK(topK)
             .build();
@@ -172,30 +172,33 @@ vectorStore.createPartition("knowledge_base_001");
 // 添加数据到指定分区
 vectorStore.add(documents, "knowledge_base_001");
 
-// 在指定分区搜索（使用 SearchRequest）
-SearchRequest request = SearchRequest.builder()
+// 在指定分区搜索（使用泛型 SearchRequest）
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .query("搜索内容")
     .topK(10)
-    .partitionNames(Collections.singletonList("knowledge_base_001"))
+    .inPartition("knowledge_base_001")
+    .documentClass(DocumentSegment.class)
     .build();
-vectorStore.similaritySearch(request, DocumentSegment.class);
+vectorStore.similaritySearch(request);
 
-// 在多个分区搜索
-SearchRequest request = SearchRequest.builder()
+// 在多个分区搜索（使用 @Singular）
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .query("搜索内容")
     .topK(10)
-    .partitionNames(Arrays.asList("kb_001", "kb_002"))
+    .inPartition("kb_001")
+    .inPartition("kb_002")
+    .documentClass(DocumentSegment.class)
     .build();
-vectorStore.similaritySearch(request, DocumentSegment.class);
+vectorStore.similaritySearch(request);
 ```
 
-## 🔍 查询与搜索（Spring AI 风格）
+## 🔍 查询与搜索（泛型 Request）
 
-本项目采用 Spring AI 风格的 Builder 模式设计 API，使用 `QueryRequest` 和 `SearchRequest` 封装请求参数，避免大量方法重载，提供更好的可读性和扩展性。
+本项目采用泛型 Builder 模式设计 API（基于 Lombok），类型信息直接封装在 `QueryRequest<T>` 和 `SearchRequest<T>` 中。
 
 ### QueryRequest - 条件查询
 
-使用 `QueryRequest` 进行条件查询：
+使用泛型 `QueryRequest<T>` 进行条件查询：
 
 ```java
 // 方式1: 简单查询（便捷方法）
@@ -205,21 +208,22 @@ List<DocumentSegment> segments = vectorStore.query(
 );
 
 // 方式2: 使用静态工厂方法
-QueryRequest request = QueryRequest.filter("file_id == 'doc_001'");
-List<DocumentSegment> segments = vectorStore.query(request, DocumentSegment.class);
+QueryRequest<Document> request = QueryRequest.of("file_id == 'doc_001'");
+List<Document> docs = vectorStore.query(request);
 
 // 方式3: 使用 Builder 完整参数
-QueryRequest request = QueryRequest.builder()
-    .filterExpression("file_id == 'doc_001'")
+QueryRequest<DocumentSegment> request = QueryRequest.<DocumentSegment>builder()
+    .filter("file_id == 'doc_001'")
     .partitionName("partition_kb001")
     .offset(0)
     .limit(100)
+    .documentClass(DocumentSegment.class)
     .build();
-List<DocumentSegment> segments = vectorStore.query(request, DocumentSegment.class);
+List<DocumentSegment> segments = vectorStore.query(request);
 
-// 方式4: 使用静态工厂方法（带分区）
-QueryRequest request = QueryRequest.inPartition("file_id == 'doc_001'", "partition_kb001");
-List<DocumentSegment> segments = vectorStore.query(request, DocumentSegment.class);
+// 方式4: 使用 of 静态工厂方法（带分区）
+QueryRequest<Document> request = QueryRequest.of("file_id == 'doc_001'", "partition_kb001");
+List<Document> docs = vectorStore.query(request);
 
 // 根据 ID 获取
 List<DocumentSegment> segments = vectorStore.getById(
@@ -230,30 +234,27 @@ List<DocumentSegment> segments = vectorStore.getById(
 
 ### SearchRequest - 向量相似度搜索
 
-使用 `SearchRequest` 进行向量搜索，支持向量查询和文本查询：
+使用泛型 `SearchRequest<T>` 进行向量搜索：
 
 ```java
 // 方式1: 使用向量搜索
 List<Float> queryVector = embeddingModel.embed("查询文本");
-SearchRequest request = SearchRequest.builder()
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .vector(queryVector)
     .topK(10)
     .filter("file_id == 'doc_001'")
     .similarityThreshold(0.7f)
+    .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request, DocumentSegment.class);
+List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
 
-// 方式2: 使用静态工厂方法
-SearchRequest request = SearchRequest.vector(queryVector)
-    .topK(10)
-    .filter("category == 'tech'")
-    .build();
-
-// 方式3: 指定分区搜索
-SearchRequest request = SearchRequest.builder()
+// 方式2: 使用 @Singular 添加多个分区
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .vector(queryVector)
     .topK(10)
-    .partitionNames(List.of("kb_001", "kb_002"))
+    .inPartition("kb_001")     // @Singular 支持多次调用
+    .inPartition("kb_002")
+    .documentClass(DocumentSegment.class)
     .build();
 
 // 遍历结果
@@ -276,33 +277,38 @@ MilvusVectorStore vectorStore = milvusClient.getVectorStore(
 );
 
 // 方式1: 使用 Builder（推荐）
-SearchRequest request = SearchRequest.builder()
-    .query("Spring Boot 框架")  // 直接传入文本
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
+    .query("Spring Boot 框架")
     .topK(10)
+    .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request, DocumentSegment.class);
+List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
 
-// 方式2: 使用静态工厂方法
-SearchRequest request = SearchRequest.query("人工智能技术")
-    .topK(5)
-    .build();
-
-// 方式3: 在指定分区搜索
-SearchRequest request = SearchRequest.builder()
+// 方式2: 在指定分区搜索
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .query("机器学习算法")
     .topK(10)
-    .partitionNames(Collections.singletonList("knowledge_base_001"))
+    .inPartition("knowledge_base_001")
+    .documentClass(DocumentSegment.class)
     .build();
 
-// 方式4: 跨多个分区搜索
-SearchRequest request = SearchRequest.builder()
+// 方式3: 跨多个分区搜索，带过滤和阈值
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .query("深度学习模型")
     .topK(10)
     .partitionNames(Arrays.asList("kb_001", "kb_002"))
     .filter("category == 'AI'")
     .similarityThreshold(0.6f)
+    .documentClass(DocumentSegment.class)
     .build();
-List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request, DocumentSegment.class);
+List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(request);
+
+// 默认返回 Document 类型（不指定 documentClass）
+SearchRequest<Document> request = SearchRequest.<Document>builder()
+    .query("问题")
+    .topK(5)
+    .build();
+List<SearchResult<Document>> results = vectorStore.similaritySearch(request);
 ```
 
 ## 🏗️ Schema 管理
@@ -387,15 +393,13 @@ List<Document> getById(List<String> ids);
 List<Document> getById(List<String> ids, String partitionName);
 <T extends Document> List<T> getById(List<String> ids, String partitionName, Class<T> clazz);
 
-// ====== 查询（Spring AI 风格）======
-List<Document> query(QueryRequest request);
-<T extends Document> List<T> query(QueryRequest request, Class<T> clazz);
+// ====== 查询（泛型 Request）======
+<T extends Document> List<T> query(QueryRequest<T> request);
 List<Document> query(String filterExpression);                    // 便捷方法
 <T extends Document> List<T> query(String filterExpression, Class<T> clazz);  // 便捷方法
 
-// ====== 向量搜索（Spring AI 风格）======
-List<SearchResult> similaritySearch(SearchRequest request);
-<T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest request, Class<T> clazz);
+// ====== 向量搜索（泛型 Request）======
+<T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest<T> request);
 
 // ====== 分区管理 ======
 void createPartition(String partitionName);
@@ -413,54 +417,72 @@ void flush();
 void compact();
 ```
 
-### QueryRequest 类
+### QueryRequest\<T\> 类
 
 ```java
 // 静态工厂方法
-QueryRequest.filter(String filterExpression);
-QueryRequest.of(String filterExpression, int offset, int limit);
-QueryRequest.inPartition(String filterExpression, String partitionName);
+QueryRequest.of(String filter);                           // 简单查询
+QueryRequest.of(String filter, int offset, int limit);    // 带分页
+QueryRequest.of(String filter, String partitionName);     // 带分区
+QueryRequest.<T>builder();                                // Builder
 
-// Builder 方式
-QueryRequest request = QueryRequest.builder()
-    .filterExpression("field == 'value'")  // 过滤表达式
-    .partitionName("partition_name")        // 分区名称（可选）
-    .offset(0)                              // 偏移量，默认 0
-    .limit(100)                             // 限制数量，默认 100
-    .outputFields(List.of("field1"))        // 输出字段（可选）
+// Builder 方法（Lombok @Builder 生成）
+QueryRequest<DocumentSegment> request = QueryRequest.<DocumentSegment>builder()
+    .filter("field == 'value'")          // 过滤表达式
+    .partitionName("partition_name")     // 分区名称（可选）
+    .offset(0)                           // 偏移量，默认 0
+    .limit(100)                          // 限制数量，默认 100
+    .outputField("field1")               // @Singular: 添加输出字段
+    .outputField("field2")               // 可多次调用
+    .documentClass(DocumentSegment.class) // 指定返回类型 ⭐
     .build();
 ```
 
-### SearchRequest 类
+### SearchRequest\<T\> 类
 
 ```java
 // 静态工厂方法
-SearchRequest.vector(List<Float> vector);   // 向量搜索
-SearchRequest.query(String query);          // 文本搜索
-SearchRequest.of(List<Float> vector, int topK);
+SearchRequest.of(List<Float> vector, int topK);           // 向量搜索
 SearchRequest.of(List<Float> vector, int topK, String filter);
-SearchRequest.of(String query, int topK);
-SearchRequest.of(String query, int topK, String filter);
+SearchRequest.of(String query, int topK);                 // 文本搜索
+SearchRequest.<T>builder();                               // Builder
 
-// Builder 方式
-SearchRequest request = SearchRequest.builder()
+// Builder 方法（Lombok @Builder + @Singular 生成）
+SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder()
     .query("搜索文本")                       // 文本查询（与 vector 二选一）
     .vector(queryVector)                    // 向量查询（与 query 二选一）
     .vectorFieldName("embedding")           // 向量字段名，默认 "embedding"
     .topK(10)                               // 返回数量，默认 10
     .filter("field == 'value'")             // 过滤表达式（可选）
-    .partitionNames(List.of("p1", "p2"))    // 分区列表（可选）
+    .inPartition("partition1")              // @Singular: 添加分区
+    .inPartition("partition2")              // 可多次调用
+    .partitionNames(List.of("p1", "p2"))    // 或直接设置列表
     .similarityThreshold(0.7f)              // 相似度阈值，默认 0.0
     .offset(0)                              // 偏移量，默认 0
-    .searchParams(Map.of("nprobe", 10))     // 搜索参数（可选）
-    .outputFields(List.of("field1"))        // 输出字段（可选）
+    .searchParam("nprobe", 10)              // @Singular: 添加搜索参数
+    .searchParam("ef", 64)                  // 可多次调用
+    .outputField("field1")                  // @Singular: 添加输出字段
+    .documentClass(DocumentSegment.class)   // 指定返回类型 ⭐
     .build();
+```
 
-// 链式调用方法
-request.nprobe(10);                         // 设置 IVF 索引的 nprobe
-request.ef(64);                             // 设置 HNSW 索引的 ef
-request.inPartition("partition_name");      // 添加分区
-request.inPartitions(List.of("p1", "p2"));  // 设置多个分区
+### 核心用法示例
+
+```java
+// 查询：类型在 Request 中指定，无需额外传参
+QueryRequest<DocumentSegment> qr = QueryRequest.<DocumentSegment>builder()
+    .filter("type == 'faq'")
+    .documentClass(DocumentSegment.class)
+    .build();
+List<DocumentSegment> docs = vectorStore.query(qr);
+
+// 搜索：类型在 Request 中指定，无需额外传参  
+SearchRequest<DocumentSegment> sr = SearchRequest.<DocumentSegment>builder()
+    .query("RAG 是什么")
+    .topK(5)
+    .documentClass(DocumentSegment.class)
+    .build();
+List<SearchResult<DocumentSegment>> results = vectorStore.similaritySearch(sr);
 ```
 
 ### MilvusClient 接口

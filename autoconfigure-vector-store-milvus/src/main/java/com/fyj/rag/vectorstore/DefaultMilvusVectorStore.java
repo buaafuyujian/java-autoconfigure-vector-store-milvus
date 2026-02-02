@@ -360,13 +360,10 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     }
 
     @Override
-    public List<Document> query(QueryRequest request) {
-        return query(request, Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<T> query(QueryRequest request, Class<T> clazz) {
+    public <T extends Document> List<T> query(QueryRequest<T> request) {
         try {
+            Class<T> clazz = request.getDocumentClass();
+
             QueryReq.QueryReqBuilder<?, ?> builder = QueryReq.builder()
                     .collectionName(collectionName)
                     .filter(request.getFilterExpression())
@@ -394,18 +391,10 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
     // ==================== 向量搜索（Spring AI 风格）====================
 
     @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public List<SearchResult> similaritySearch(SearchRequest request) {
-        return (List) doSearch(request, Document.class);
-    }
-
-    @Override
-    public <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest request, Class<T> clazz) {
-        return doSearch(request, clazz);
-    }
-
-    private <T extends Document> List<SearchResult<T>> doSearch(SearchRequest request, Class<T> clazz) {
+    public <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest<T> request) {
         try {
+            Class<T> clazz = request.getDocumentClass();
+
             // 处理文本查询：如果是文本查询，需要先转换为向量
             List<Float> vector = request.getVector();
             if (request.isTextQuery()) {

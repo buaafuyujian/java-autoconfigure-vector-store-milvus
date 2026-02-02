@@ -209,97 +209,86 @@ public interface MilvusVectorStore {
     // ==================== 查询操作（Spring AI 风格）====================
 
     /**
-     * 使用 QueryRequest 查询文档
+     * 使用 QueryRequest 查询文档（泛型版本）
      * <p>
-     * 这是推荐的查询方式，支持过滤、分区、分页等所有功能
+     * 这是推荐的查询方式，支持过滤、分区、分页、指定返回类型等所有功能
      * <p>
      * 示例：
      * <pre>{@code
-     * QueryRequest request = QueryRequest.builder()
-     *     .filterExpression("category == 'tech'")
-     *     .partitionName("articles")
-     *     .offset(0)
+     * // 指定返回类型
+     * QueryRequest<FaqDocument> request = QueryRequest.<FaqDocument>builder()
+     *     .filter("category == 'tech'")
+     *     .inPartition("articles")
      *     .limit(50)
+     *     .as(FaqDocument.class)
      *     .build();
+     * List<FaqDocument> docs = vectorStore.query(request);
+     *
+     * // 默认返回 Document 类型
+     * QueryRequest<Document> request = QueryRequest.filter("type == 'faq'").build();
      * List<Document> docs = vectorStore.query(request);
      * }</pre>
      *
-     * @param request 查询请求
+     * @param request 查询请求（包含返回类型信息）
      * @return 文档列表
      */
-    List<Document> query(QueryRequest request);
-
-    /**
-     * 使用 QueryRequest 查询文档，返回指定类型
-     *
-     * @param request 查询请求
-     * @param clazz 文档类型（Document 的子类）
-     * @return 文档列表
-     */
-    <T extends Document> List<T> query(QueryRequest request, Class<T> clazz);
+    <T extends Document> List<T> query(QueryRequest<T> request);
 
     /**
      * 简单查询：根据过滤表达式查询文档
      * <p>
-     * 便捷方法，等同于 {@code query(QueryRequest.filter(filterExpression))}
+     * 便捷方法，返回 Document 类型
      *
      * @param filterExpression 过滤表达式
      * @return 文档列表
      */
     default List<Document> query(String filterExpression) {
-        return query(QueryRequest.filter(filterExpression));
+        return query(QueryRequest.of(filterExpression));
     }
 
     /**
      * 简单查询：根据过滤表达式查询文档，返回指定类型
+     * <p>
+     * 便捷方法
      *
      * @param filterExpression 过滤表达式
-     * @param clazz 文档类型（Document 的子类）
+     * @param clazz 文档类型
      * @return 文档列表
      */
     default <T extends Document> List<T> query(String filterExpression, Class<T> clazz) {
-        return query(QueryRequest.filter(filterExpression), clazz);
+        return query(QueryRequest.<T>builder().filter(filterExpression).documentClass(clazz).build());
     }
 
     // ==================== 向量搜索（Spring AI 风格）====================
 
     /**
-     * 向量相似度搜索
+     * 向量相似度搜索（泛型版本）
      * <p>
-     * 这是推荐的搜索方式，支持向量/文本查询、过滤、分区等所有功能
+     * 这是推荐的搜索方式，支持向量/文本查询、过滤、分区、指定返回类型等所有功能
      * <p>
      * 示例：
      * <pre>{@code
-     * // 向量搜索
-     * SearchRequest request = SearchRequest.builder()
-     *     .vector(queryVector)
+     * // 文本搜索，指定返回类型
+     * SearchRequest<FaqDocument> request = SearchRequest.<FaqDocument>query("RAG 是什么")
      *     .topK(10)
-     *     .filter("category == 'tech'")
-     *     .partitionNames(List.of("partition1", "partition2"))
-     *     .similarityThreshold(0.7f)
+     *     .filter("type == 'faq'")
+     *     .inPartition("knowledge_base")
+     *     .as(FaqDocument.class)
      *     .build();
-     * List<SearchResult> results = vectorStore.similaritySearch(request);
+     * List<SearchResult<FaqDocument>> results = vectorStore.similaritySearch(request);
      *
-     * // 文本搜索（需要 EmbeddingModel）
-     * SearchRequest textRequest = SearchRequest.query("什么是机器学习")
-     *     .topK(5)
+     * // 向量搜索
+     * SearchRequest<Document> request = SearchRequest.vector(queryVector)
+     *     .topK(10)
+     *     .threshold(0.7f)
      *     .build();
-     * List<SearchResult> results = vectorStore.similaritySearch(textRequest);
+     * List<SearchResult<Document>> results = vectorStore.similaritySearch(request);
      * }</pre>
      *
-     * @param request 搜索请求
+     * @param request 搜索请求（包含返回类型信息）
      * @return 搜索结果列表
      */
-    List<SearchResult> similaritySearch(SearchRequest request);
-
-    /**
-     * 向量相似度搜索，返回指定类型
-     *
-     * @param request 搜索请求
-     * @param clazz 文档类型（Document 的子类）
-     * @return 搜索结果列表
-     */
-    <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest request, Class<T> clazz);
+    <T extends Document> List<SearchResult<T>> similaritySearch(SearchRequest<T> request);
 
 
     // ==================== 数据管理 ====================
