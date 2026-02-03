@@ -6,7 +6,7 @@
 
     <groupId>io.github.buaafuyujian</groupId>
     <artifactId>autoconfigure-vector-store-milvus</artifactId>
-    <version>1.4</version>
+    <version>1.4.1</version>
     <packaging>jar</packaging>
 
     <name>autoconfigure-vector-store-milvus</name>

@@ -380,9 +380,12 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
                 builder.partitionNames(Collections.singletonList(request.getPartitionName()));
             }
 
-            if (request.getOutputFields() != null && !request.getOutputFields().isEmpty()) {
-                builder.outputFields(request.getOutputFields());
+            // 获取需要返回的字段列表（排除 embedding 等带 @ExcludeField 注解的字段）
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
             }
+            builder.outputFields(outputFields);
 
             QueryResp response = client.query(builder.build());
             return response.getQueryResults().stream()
