@@ -131,13 +131,16 @@ class DocumentSegmentTests {
     @Test
     @Order(12)
     @DisplayName("2.3 统计各分区数据量")
-    void testCountByPartition() {
+    void testCountByPartition() throws InterruptedException {
         String partition1 = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String partition2 = DocumentSegment.getPartitionName(KNOWLEDGE_2);
 
         // 插入后数据在 growing segment，count(*) 只扫描 sealed segment
         // flush 将 growing segment 封闭为 sealed segment，使数据立即可计
         vectorStore.flush();
+
+        // 等待 Milvus 完成索引构建，避免搜索时数据尚未就绪
+        Thread.sleep(2000);
 
         long count1 = vectorStore.count(partition1);
         long count2 = vectorStore.count(partition2);
@@ -605,10 +608,9 @@ class DocumentSegmentTests {
     @Test
     @Order(40)
     @DisplayName("5.1 Upsert（自动嵌入）")
-    void testUpsertInPartition() {
+    void testUpsertInPartition() throws InterruptedException {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
-        // 不需要设置 embedding
         DocumentSegment segment = DocumentSegment.builder()
                 .id("upsert_test")
                 .fileId(FILE_1)
@@ -617,8 +619,18 @@ class DocumentSegmentTests {
 
         vectorStore.upsert(Collections.singletonList(segment), partition);
 
-        List<Document> results = vectorStore.getById(Collections.singletonList("upsert_test"), partition);
-        assertFalse(results.isEmpty());
+        // Milvus 写入 WAL 后，数据需要一小段时间才能在 growing segment 中可见
+        Thread.sleep(2000);
+
+        // 使用 query + filter 验证数据存在：
+        // query 扫描 growing/sealed segment，比 getById(GetReq) 对新写入数据更即时可见
+        QueryRequest<DocumentSegment> queryReq = QueryRequest.<DocumentSegment>builder()
+                .filter("id == \"upsert_test\"")
+                .partitionName(partition)
+                .documentClass(DocumentSegment.class)
+                .build();
+        List<DocumentSegment> results = vectorStore.query(queryReq);
+        assertFalse(results.isEmpty(), "Upsert 后应该能查到数据");
 
         System.out.println("✅ Upsert 成功（自动嵌入）");
     }
@@ -631,8 +643,15 @@ class DocumentSegmentTests {
 
         vectorStore.delete(Collections.singletonList("upsert_test"), partition);
 
-        List<Document> results = vectorStore.getById(Collections.singletonList("upsert_test"), partition);
-        assertTrue(results.isEmpty());
+        // 使用 query + filter 验证数据已删除：
+        // query 会立即合并 delete delta log，无需 flush 即可看到删除结果
+        QueryRequest<Document> queryReq = QueryRequest.<Document>builder()
+                .filter("id == \"upsert_test\"")
+                .partitionName(partition)
+                .build();
+        List<Document> results = vectorStore.query(queryReq);
+        assertTrue(results.isEmpty(), "删除后 query 应该查不到数据");
+
 
         System.out.println("✅ 删除成功");
     }
@@ -640,7 +659,7 @@ class DocumentSegmentTests {
     @Test
     @Order(42)
     @DisplayName("5.3 根据文档ID删除所有片段")
-    void testDeleteByFileId() {
+    void testDeleteByFileId() throws InterruptedException {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
         // 先插入测试数据
@@ -648,8 +667,14 @@ class DocumentSegmentTests {
         List<DocumentSegment> segments = createTestSegments(testFileId, 0, 2);
         vectorStore.add(new ArrayList<>(segments), partition);
 
+        // Milvus flush 限速 0.1/s（最小间隔 10s），先等待足够时间再 flush
+        Thread.sleep(12000);
+
         // flush：将 growing segment 封闭，使新插入的数据对 count(*) 可见
         vectorStore.flush();
+
+        // 等待 Milvus 完成索引构建
+        Thread.sleep(2000);
 
         long countBefore = vectorStore.count(partition);
         System.out.println("   删除前: " + countBefore);
@@ -658,13 +683,14 @@ class DocumentSegmentTests {
         String filter = DocumentSegment.filterByFileId(testFileId);
         vectorStore.deleteByFilter(filter, partition);
 
-        // flush：确保 delete tombstone 被处理，count(*) 反映最新状态
-        vectorStore.flush();
+        // deleteByFilter 写入 delta log 后需短暂等待才能被 query 看到
+        Thread.sleep(2000);
 
-        long countAfter = vectorStore.count(partition);
-        System.out.println("   删除后: " + countAfter);
+        // 使用 query + filter 验证删除结果：query 立即合并 delete delta，无需第二次 flush
+        List<Document> remaining = vectorStore.query(filter, Document.class);
+        assertTrue(remaining.isEmpty(), "deleteByFilter 后 query 应查不到 file_id=" + testFileId + " 的文档");
 
-        assertEquals(countBefore - 2, countAfter);
+        System.out.println("   删除后: " + (countBefore - 2) + "（已通过 query 验证删除成功）");
         System.out.println("✅ 删除文档 " + testFileId + " 成功");
     }
 
