@@ -2,6 +2,7 @@ package com.fyj.rag.vectorstore;
 
 import com.fyj.rag.vectorstore.model.Document;
 import com.fyj.rag.vectorstore.model.SearchResult;
+import com.fyj.rag.vectorstore.request.BatchSearchRequest;
 import com.fyj.rag.vectorstore.request.QueryRequest;
 import com.fyj.rag.vectorstore.request.SearchRequest;
 
@@ -328,6 +329,42 @@ public interface MilvusVectorStore {
      * @return 搜索结果列表
      */
     <T extends Document> List<SearchResult<T>> search(SearchRequest<T> request);
+
+    /**
+     * 批量搜索（一次 RPC 同时搜索多个 query/vector）
+     * <p>
+     * 利用 Milvus SDK 原生的 {@code SearchReq.data(List<BaseVector>)} 支持，
+     * 将多个查询向量/文本打包进同一个请求，避免多次网络往返。
+     * <p>
+     * 返回值中每个元素对应一个输入 query 的结果列表，顺序与
+     * {@link BatchSearchRequest#getEffectiveTexts()} /
+     * {@link BatchSearchRequest#getEffectiveVectors()} 保持一致。
+     * <p>
+     * 使用示例：
+     * <pre>{@code
+     * // 多文本批量向量搜索
+     * BatchSearchRequest<DocumentSegment> req = BatchSearchRequest.<DocumentSegment>builder()
+     *     .queries(List.of("人工智能", "机器学习", "深度学习"))
+     *     .topK(3)
+     *     .documentClass(DocumentSegment.class)
+     *     .build();
+     * List<List<SearchResult<DocumentSegment>>> results = vectorStore.batchSearch(req);
+     * // results.get(0) -> "人工智能" 的 topK 结果
+     * // results.get(1) -> "机器学习" 的 topK 结果
+     * // results.get(2) -> "深度学习" 的 topK 结果
+     *
+     * // 多向量批量搜索
+     * BatchSearchRequest<Document> vecReq = BatchSearchRequest.<Document>builder()
+     *     .vectors(List.of(vec1, vec2, vec3))
+     *     .topK(5)
+     *     .build();
+     * List<List<SearchResult<Document>>> results = vectorStore.batchSearch(vecReq);
+     * }</pre>
+     *
+     * @param request 批量搜索请求，通过 {@code queries} 或 {@code vectors} 指定多个查询
+     * @return 每个 query 对应的搜索结果列表，外层顺序与输入一致
+     */
+    <T extends Document> List<List<SearchResult<T>>> batchSearch(BatchSearchRequest<T> request);
 
 
     // ==================== 数据管理 ====================

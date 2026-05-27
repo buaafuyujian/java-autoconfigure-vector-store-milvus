@@ -120,9 +120,16 @@ public class Document {
 
     /**
      * 转换为 JsonObject，用于插入 Milvus
-     * 使用 Gson 序列化，子类的字段会自动包含
+     * <p>
+     * 使用 Gson 序列化，子类的字段会自动包含。
+     * 注意：{@code metadata} 为 null 时 Gson 默认不输出该 key，
+     * 但 Milvus Schema 要求该字段必须存在，因此此处保证序列化为 {@code {}}。
      */
     public JsonObject toJsonObject() {
+        // 确保 metadata 不为 null，避免 Gson 序列化时省略该字段
+        if (this.metadata == null) {
+            this.metadata = new HashMap<>();
+        }
         return GSON.toJsonTree(this).getAsJsonObject();
     }
 

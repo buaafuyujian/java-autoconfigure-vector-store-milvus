@@ -6,6 +6,7 @@ import com.fyj.rag.schema.IndexSchema;
 import com.fyj.rag.vectorstore.MilvusVectorStore;
 import com.fyj.rag.vectorstore.model.Document;
 import com.fyj.rag.vectorstore.model.SearchResult;
+import com.fyj.rag.vectorstore.request.BatchSearchRequest;
 import com.fyj.rag.vectorstore.request.QueryRequest;
 import com.fyj.rag.vectorstore.request.SearchRequest;
 import com.fyj.rag.vectorstore.request.SearchType;
@@ -86,11 +87,14 @@ class DocumentSegmentTests {
     void testCreatePartitions() {
         String partition1 = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         vectorStore.createPartition(partition1);
-        System.out.println("✅ 创建分区: " + partition1);
+        // 新分区在 Collection load 之后创建，需要显式 load 才能参与查询/统计
+        vectorStore.loadPartition(partition1);
+        System.out.println("✅ 创建并加载分区: " + partition1);
 
         String partition2 = DocumentSegment.getPartitionName(KNOWLEDGE_2);
         vectorStore.createPartition(partition2);
-        System.out.println("✅ 创建分区: " + partition2);
+        vectorStore.loadPartition(partition2);
+        System.out.println("✅ 创建并加载分区: " + partition2);
 
         System.out.println("   所有分区: " + vectorStore.listPartitions());
     }
@@ -130,6 +134,10 @@ class DocumentSegmentTests {
     void testCountByPartition() {
         String partition1 = DocumentSegment.getPartitionName(KNOWLEDGE_1);
         String partition2 = DocumentSegment.getPartitionName(KNOWLEDGE_2);
+
+        // 插入后数据在 growing segment，count(*) 只扫描 sealed segment
+        // flush 将 growing segment 封闭为 sealed segment，使数据立即可计
+        vectorStore.flush();
 
         long count1 = vectorStore.count(partition1);
         long count2 = vectorStore.count(partition2);
@@ -497,6 +505,101 @@ class DocumentSegmentTests {
         });
     }
 
+    // ==================== 4.10 批量搜索（一次 RPC，多 query）====================
+
+    @Test
+    @Order(39)
+    @DisplayName("4.10 批量向量搜索（多个 query 文本，一次 RPC）")
+    void testBatchVectorSearch() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        // 三个查询文本一次性发送给 Milvus，SDK 层面并行处理
+        BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+                .queries(Arrays.asList("Java 编程语言", "人工智能技术", "Spring Boot 框架"))
+                .topK(2)
+                .inPartition(partition)
+                .documentClass(DocumentSegment.class)
+                .build();
+
+        List<List<SearchResult<DocumentSegment>>> allResults = vectorStore.batchSearch(request);
+
+        // 外层结果数 == 输入 query 数
+        assertEquals(3, allResults.size(), "批量搜索应返回 3 组结果");
+
+        List<String> queries = Arrays.asList("Java 编程语言", "人工智能技术", "Spring Boot 框架");
+        for (int i = 0; i < allResults.size(); i++) {
+            List<SearchResult<DocumentSegment>> group = allResults.get(i);
+            assertFalse(group.isEmpty(), "每组结果不应为空: query=" + queries.get(i));
+            System.out.println("✅ 批量查询[" + i + "] \"" + queries.get(i) + "\"，返回 " + group.size() + " 条:");
+            group.forEach(r -> {
+                DocumentSegment seg = r.getDocument();
+                System.out.println("   - " + seg.getId()
+                        + " (score: " + String.format("%.4f", r.getScore()) + ")");
+                System.out.println("     content: " + seg.getContent());
+            });
+        }
+    }
+
+    @Test
+    @Order(45)
+    @DisplayName("4.11 批量 BM25 搜索（多个 query 文本，一次 RPC）")
+    void testBatchBM25Search() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+                .queries(Arrays.asList("框架", "深度学习"))
+                .searchType(SearchType.BM25)
+                .topK(2)
+                .inPartition(partition)
+                .documentClass(DocumentSegment.class)
+                .build();
+
+        List<List<SearchResult<DocumentSegment>>> allResults = vectorStore.batchSearch(request);
+
+        assertEquals(2, allResults.size(), "批量 BM25 搜索应返回 2 组结果");
+
+        List<String> queries = Arrays.asList("框架", "深度学习");
+        for (int i = 0; i < allResults.size(); i++) {
+            System.out.println("✅ BM25 批量查询[" + i + "] \"" + queries.get(i)
+                    + "\"，返回 " + allResults.get(i).size() + " 条:");
+            allResults.get(i).forEach(r ->
+                    System.out.println("   - " + r.getDocument().getId()
+                            + " (score: " + String.format("%.4f", r.getScore()) + ")"
+                            + " | " + r.getDocument().getContent()));
+        }
+    }
+
+    @Test
+    @Order(46)
+    @DisplayName("4.12 批量混合搜索（向量 + BM25，多个 query，一次 RPC）")
+    void testBatchHybridSearch() {
+        String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
+
+        BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+                .queries(Arrays.asList("人工智能 机器学习", "Java Spring"))
+                .searchType(SearchType.HYBRID)
+                .vectorWeight(0.6f)
+                .bm25Weight(0.4f)
+                .topK(2)
+                .inPartition(partition)
+                .documentClass(DocumentSegment.class)
+                .build();
+
+        List<List<SearchResult<DocumentSegment>>> allResults = vectorStore.batchSearch(request);
+
+        assertEquals(2, allResults.size(), "批量混合搜索应返回 2 组结果");
+
+        List<String> queries = Arrays.asList("人工智能 机器学习", "Java Spring");
+        for (int i = 0; i < allResults.size(); i++) {
+            System.out.println("✅ 混合批量查询[" + i + "] \"" + queries.get(i)
+                    + "\"，返回 " + allResults.get(i).size() + " 条:");
+            allResults.get(i).forEach(r ->
+                    System.out.println("   - " + r.getDocument().getId()
+                            + " (score: " + String.format("%.4f", r.getScore()) + ")"
+                            + " | " + r.getDocument().getContent()));
+        }
+    }
+
     // ==================== 5. 分区数据管理 ====================
 
     @Test
@@ -545,12 +648,18 @@ class DocumentSegmentTests {
         List<DocumentSegment> segments = createTestSegments(testFileId, 0, 2);
         vectorStore.add(new ArrayList<>(segments), partition);
 
+        // flush：将 growing segment 封闭，使新插入的数据对 count(*) 可见
+        vectorStore.flush();
+
         long countBefore = vectorStore.count(partition);
         System.out.println("   删除前: " + countBefore);
 
         // 删除
         String filter = DocumentSegment.filterByFileId(testFileId);
         vectorStore.deleteByFilter(filter, partition);
+
+        // flush：确保 delete tombstone 被处理，count(*) 反映最新状态
+        vectorStore.flush();
 
         long countAfter = vectorStore.count(partition);
         System.out.println("   删除后: " + countAfter);

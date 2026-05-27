@@ -3,6 +3,7 @@ package com.fyj.rag.vectorstore;
 import com.fyj.rag.exception.*;
 import com.fyj.rag.vectorstore.model.Document;
 import com.fyj.rag.vectorstore.model.SearchResult;
+import com.fyj.rag.vectorstore.request.BatchSearchRequest;
 import com.fyj.rag.vectorstore.request.QueryRequest;
 import com.fyj.rag.vectorstore.request.SearchRequest;
 import com.google.gson.Gson;
@@ -12,6 +13,7 @@ import io.milvus.v2.service.partition.request.*;
 import io.milvus.v2.service.utility.request.CompactReq;
 import io.milvus.v2.service.utility.request.FlushReq;
 import io.milvus.v2.service.vector.request.*;
+import io.milvus.v2.service.vector.request.data.BaseVector;
 import io.milvus.v2.service.vector.request.data.EmbeddedText;
 import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.request.ranker.WeightedRanker;
@@ -414,6 +416,21 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         }
     }
 
+    @Override
+    public <T extends Document> List<List<SearchResult<T>>> batchSearch(BatchSearchRequest<T> request) {
+        switch (request.getSearchType()) {
+            case VECTOR:
+                return vectorBatchSearch(request);
+            case BM25:
+                return bm25BatchSearch(request);
+            case HYBRID:
+                return hybridBatchSearch(request);
+            default:
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "Unknown search type: " + request.getSearchType(), null);
+        }
+    }
+
     /**
      * 向量相似度搜索（ANN）
      */
@@ -595,8 +612,211 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
         }
     }
 
+    // ==================== 批量搜索（一次 RPC，多向量/多查询）====================
+
     /**
-     * 处理搜索结果，转换为 SearchResult 列表
+     * 批量向量搜索：将多个向量/文本一次性传入 SearchReq.data()
+     * <p>
+     * SDK 调用示例等价于：
+     * <pre>{@code
+     * SearchReq.builder()
+     *     .data(List.of(new FloatVec(vec1), new FloatVec(vec2), new FloatVec(vec3)))
+     *     .topK(5)
+     *     .build();
+     * }</pre>
+     * 返回的 {@code SearchResp.getSearchResults()} 是 {@code List<List<SearchResult>>}，
+     * 外层每个元素对应一个输入向量的结果。
+     */
+    private <T extends Document> List<List<SearchResult<T>>> vectorBatchSearch(BatchSearchRequest<T> request) {
+        try {
+            Class<T> clazz = request.getDocumentClass();
+
+            // 收集所有查询向量：优先使用 vectors，否则对 queries 批量 embed
+            List<List<Float>> allVectors;
+            if (request.getVectors() != null && !request.getVectors().isEmpty()) {
+                allVectors = request.getVectors();
+            } else {
+                List<String> texts = request.getEffectiveTexts();
+                if (texts.isEmpty()) {
+                    throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                            "Batch vector search requires vectors or queries", null);
+                }
+                allVectors = batchEmbedQueries(texts);
+            }
+
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
+            }
+
+            // 将全部向量打包进同一个 data 列表，一次 RPC 完成
+            List<BaseVector> data = allVectors.stream()
+                    .map(FloatVec::new)
+                    .collect(Collectors.toList());
+
+            SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
+                    .collectionName(collectionName)
+                    .annsField(request.getVectorFieldName())
+                    .data(data)
+                    .topK(request.getTopK())
+                    .outputFields(outputFields);
+
+            if (request.getFilter() != null && !request.getFilter().isEmpty()) {
+                builder.filter(request.getFilter());
+            }
+            if (request.getOffset() > 0) {
+                builder.offset(request.getOffset());
+            }
+            if (request.getSearchParams() != null && !request.getSearchParams().isEmpty()) {
+                builder.searchParams(request.getSearchParams());
+            }
+            if (request.hasPartitions()) {
+                builder.partitionNames(request.getPartitionNames());
+            }
+
+            SearchResp response = client.search(builder.build());
+            log.debug("Batch vector search: {} queries -> {} result groups",
+                    data.size(), response.getSearchResults().size());
+
+            return processSearchResultsGrouped(response, clazz, request.getSimilarityThreshold());
+        } catch (MilvusSearchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "Failed to perform batch vector search in collection: " + collectionName, e);
+        }
+    }
+
+    /**
+     * 批量 BM25 搜索：将多个文本一次性传入 SearchReq.data()，每个文本用 EmbeddedText 包装
+     */
+    private <T extends Document> List<List<SearchResult<T>>> bm25BatchSearch(BatchSearchRequest<T> request) {
+        try {
+            Class<T> clazz = request.getDocumentClass();
+
+            List<String> texts = request.getEffectiveTexts();
+            if (texts.isEmpty()) {
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "Batch BM25 search requires queries", null);
+            }
+
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
+            }
+
+            // 每个文本用 EmbeddedText 包装，Milvus 服务端自动转为稀疏向量
+            List<BaseVector> data = texts.stream()
+                    .map(EmbeddedText::new)
+                    .collect(Collectors.toList());
+
+            SearchReq.SearchReqBuilder<?, ?> builder = SearchReq.builder()
+                    .collectionName(collectionName)
+                    .annsField(request.getSparseVectorFieldName())
+                    .data(data)
+                    .topK(request.getTopK())
+                    .outputFields(outputFields);
+
+            if (request.getFilter() != null && !request.getFilter().isEmpty()) {
+                builder.filter(request.getFilter());
+            }
+            if (request.getOffset() > 0) {
+                builder.offset(request.getOffset());
+            }
+            if (request.hasPartitions()) {
+                builder.partitionNames(request.getPartitionNames());
+            }
+
+            SearchResp response = client.search(builder.build());
+            log.debug("Batch BM25 search: {} queries -> {} result groups",
+                    data.size(), response.getSearchResults().size());
+
+            return processSearchResultsGrouped(response, clazz, request.getSimilarityThreshold());
+        } catch (MilvusSearchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "Failed to perform batch BM25 search in collection: " + collectionName, e);
+        }
+    }
+
+    /**
+     * 批量混合搜索：AnnSearchReq 的 vectors 分别传入多组向量/文本，
+     * 由 Milvus 服务端并行执行后用 WeightedRanker 融合
+     */
+    private <T extends Document> List<List<SearchResult<T>>> hybridBatchSearch(BatchSearchRequest<T> request) {
+        try {
+            Class<T> clazz = request.getDocumentClass();
+
+            List<String> texts = request.getEffectiveTexts();
+            if (texts.isEmpty()) {
+                throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                        "Batch hybrid search requires queries (or vectors)", null);
+            }
+
+            // 批量 embed 所有文本，一次 EmbeddingModel 调用
+            List<List<Float>> allVectors;
+            if (request.getVectors() != null && !request.getVectors().isEmpty()) {
+                allVectors = request.getVectors();
+            } else {
+                allVectors = batchEmbedQueries(texts);
+            }
+
+            List<String> outputFields = request.getOutputFields();
+            if (outputFields == null || outputFields.isEmpty()) {
+                outputFields = Document.getOutputFields(clazz);
+            }
+
+            // 将全部向量 / 全部文本分别打包进两路 AnnSearchReq 的 vectors 列表
+            List<BaseVector> denseData = allVectors.stream()
+                    .map(FloatVec::new)
+                    .collect(Collectors.toList());
+
+            List<BaseVector> sparseData = texts.stream()
+                    .map(EmbeddedText::new)
+                    .collect(Collectors.toList());
+
+            AnnSearchReq vectorSearchReq = AnnSearchReq.builder()
+                    .vectorFieldName(request.getVectorFieldName())
+                    .vectors(denseData)
+                    .topK(request.getTopK())
+                    .build();
+
+            AnnSearchReq bm25SearchReq = AnnSearchReq.builder()
+                    .vectorFieldName(request.getSparseVectorFieldName())
+                    .vectors(sparseData)
+                    .topK(request.getTopK())
+                    .build();
+
+            List<Float> weights = Arrays.asList(request.getVectorWeight(), request.getBm25Weight());
+            WeightedRanker ranker = new WeightedRanker(weights);
+
+            HybridSearchReq.HybridSearchReqBuilder<?, ?> builder = HybridSearchReq.builder()
+                    .collectionName(collectionName)
+                    .searchRequests(Arrays.asList(vectorSearchReq, bm25SearchReq))
+                    .ranker(ranker)
+                    .topK(request.getTopK())
+                    .outFields(outputFields);
+
+            if (request.hasPartitions()) {
+                builder.partitionNames(request.getPartitionNames());
+            }
+
+            SearchResp response = client.hybridSearch(builder.build());
+            log.debug("Batch hybrid search: {} queries -> {} result groups",
+                    texts.size(), response.getSearchResults().size());
+
+            return processSearchResultsGrouped(response, clazz, request.getSimilarityThreshold());
+        } catch (MilvusSearchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "Failed to perform batch hybrid search in collection: " + collectionName, e);
+        }
+    }
+
+    /**
+     * 处理搜索结果，转换为 SearchResult 列表（平铺，兼容单 query 场景）
      */
     private <T extends Document> List<SearchResult<T>> processSearchResults(
             SearchResp response, Class<T> clazz, float similarityThreshold) {
@@ -613,6 +833,49 @@ public class DefaultMilvusVectorStore implements MilvusVectorStore {
             }
         }
         return results;
+    }
+
+    /**
+     * 处理批量搜索结果，保留每个 query 的结果分组
+     * <p>
+     * {@code SearchResp.getSearchResults()} 返回 {@code List<List<SearchResult>>}，
+     * 外层索引与输入 data 列表的索引一一对应。
+     */
+    private <T extends Document> List<List<SearchResult<T>>> processSearchResultsGrouped(
+            SearchResp response, Class<T> clazz, float similarityThreshold) {
+        List<List<SearchResult<T>>> allResults = new ArrayList<>();
+        for (List<SearchResp.SearchResult> searchResults : response.getSearchResults()) {
+            List<SearchResult<T>> groupResults = new ArrayList<>();
+            for (SearchResp.SearchResult result : searchResults) {
+                T doc = searchResultToDocument(result, clazz);
+                float score = result.getScore();
+                if (score >= similarityThreshold) {
+                    groupResults.add(SearchResult.of(doc, score, score));
+                }
+            }
+            allResults.add(groupResults);
+        }
+        return allResults;
+    }
+
+    /**
+     * 批量将查询文本转为向量（一次 EmbeddingModel 调用）
+     */
+    private List<List<Float>> batchEmbedQueries(List<String> texts) {
+        if (embeddingModel == null) {
+            throw new MilvusSearchException(ErrorCode.SEARCH_FAILED,
+                    "EmbeddingModel is required for text-based search. " +
+                    "Please provide an EmbeddingModel when creating the VectorStore.", null);
+        }
+        List<float[]> embeddings = embeddingModel.embed(texts);
+        List<List<Float>> result = new ArrayList<>(embeddings.size());
+        for (float[] arr : embeddings) {
+            List<Float> vec = new ArrayList<>(arr.length);
+            for (float f : arr) vec.add(f);
+            result.add(vec);
+        }
+        log.debug("Batch embedded {} query texts using EmbeddingModel", texts.size());
+        return result;
     }
 
     // ==================== 数据管理 ====================
