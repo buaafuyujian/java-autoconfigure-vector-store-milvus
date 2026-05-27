@@ -638,10 +638,13 @@ class DocumentSegmentTests {
     @Test
     @Order(41)
     @DisplayName("5.2 删除数据")
-    void testDeleteInPartition() {
+    void testDeleteInPartition() throws InterruptedException {
         String partition = DocumentSegment.getPartitionName(KNOWLEDGE_1);
 
         vectorStore.delete(Collections.singletonList("upsert_test"), partition);
+
+        // delete delta log 写入后需短暂等待才能被 query 看到
+        Thread.sleep(2000);
 
         // 使用 query + filter 验证数据已删除：
         // query 会立即合并 delete delta log，无需 flush 即可看到删除结果
