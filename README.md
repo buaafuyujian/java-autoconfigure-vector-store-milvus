@@ -16,6 +16,7 @@
 - 🤖 **Spring AI 集成** - 可选集成 EmbeddingModel 自动向量化
 - 📝 **BM25 全文检索** - 支持基于关键词的全文检索
 - ⚡ **混合搜索** - 结合向量语义搜索和 BM25 关键词搜索，可自定义权重
+- 🚄 **批量搜索（Batch Search）** - 多个查询向量通过单次 RPC 完成，显著降低网络开销
 
 ## 📁 项目结构
 
@@ -46,9 +47,11 @@ milvus-test/
 │   │       │   ├── Document.java         # 文档实体基类
 │   │       │   └── SearchResult.java
 │   │       ├── request/
-│   │       │   ├── QueryRequest.java     # 查询请求（泛型）
-│   │       │   ├── SearchRequest.java    # 搜索请求（泛型，支持多种搜索类型）
-│   │       │   └── SearchType.java       # 搜索类型枚举（VECTOR/BM25/HYBRID）
+│   │       │   ├── QueryRequest.java        # 查询请求（泛型）
+│   │       │   ├── BaseSearchRequest.java   # 搜索请求抽象基类（共享参数）
+│   │       │   ├── SearchRequest.java       # 单次搜索请求（泛型，支持多种搜索类型）
+│   │       │   ├── BatchSearchRequest.java  # 批量搜索请求（多向量单次 RPC）
+│   │       │   └── SearchType.java          # 搜索类型枚举（VECTOR/BM25/HYBRID）
 │   │       └── annotation/
 │   │           └── ExcludeField.java     # 排除字段注解
 │   └── pom.xml
@@ -323,9 +326,106 @@ SearchRequest<Document> request = SearchRequest.hybrid("机器学习算法", 10,
 List<SearchResult<Document>> results = vectorStore.search(request);
 ```
 
+### 批量搜索（Batch Search）
+
+`BatchSearchRequest` 将多个查询向量打包进**单次** Milvus RPC（`SearchReq.data(List<BaseVector>)`），相比循环调用 `search()` 可显著降低网络往返延迟。返回值是 `List<List<SearchResult<T>>>`，顺序与输入查询一一对应。
+
+三种搜索类型（VECTOR / BM25 / HYBRID）均支持批量模式。
+
+#### 批量向量搜索
+
+```java
+// 方式1: 传入多个文本（自动批量嵌入，一次 RPC）
+BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+    .queries(Arrays.asList("Java 编程语言", "人工智能技术", "Spring Boot 框架"))
+    .topK(5)
+    .inPartition("partition_kb001")
+    .documentClass(DocumentSegment.class)
+    .build();
+
+List<List<SearchResult<DocumentSegment>>> allResults = vectorStore.batchSearch(request);
+
+for (int i = 0; i < allResults.size(); i++) {
+    System.out.println("查询[" + i + "] 返回 " + allResults.get(i).size() + " 条");
+    allResults.get(i).forEach(r -> System.out.println("  - " + r.getDocument().getId()));
+}
+
+// 方式2: 传入多个预计算向量
+List<List<Float>> vectors = List.of(
+    embeddingModel.embed("Java 编程语言"),
+    embeddingModel.embed("人工智能技术")
+);
+BatchSearchRequest<Document> request = BatchSearchRequest.<Document>builder()
+    .vectors(vectors)
+    .topK(5)
+    .build();
+
+List<List<SearchResult<Document>>> results = vectorStore.batchSearch(request);
+
+// 方式3: 使用静态工厂方法
+List<List<SearchResult<Document>>> results = vectorStore.batchSearch(
+    BatchSearchRequest.ofQueries(Arrays.asList("Java", "AI"), 5)
+);
+```
+
+#### 批量 BM25 搜索
+
+```java
+// 使用 Builder
+BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+    .queries(Arrays.asList("框架", "深度学习"))
+    .searchType(SearchType.BM25)
+    .topK(5)
+    .documentClass(DocumentSegment.class)
+    .build();
+
+// 或使用静态工厂方法
+BatchSearchRequest<Document> request = BatchSearchRequest.bm25(
+    Arrays.asList("框架", "深度学习"), 5
+);
+
+List<List<SearchResult<Document>>> results = vectorStore.batchSearch(request);
+```
+
+#### 批量混合搜索
+
+```java
+// 使用 Builder，自定义权重
+BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+    .queries(Arrays.asList("人工智能 机器学习", "Java Spring"))
+    .searchType(SearchType.HYBRID)
+    .vectorWeight(0.7f)
+    .bm25Weight(0.3f)
+    .topK(5)
+    .documentClass(DocumentSegment.class)
+    .build();
+
+// 或使用静态工厂方法（默认各 50%）
+BatchSearchRequest<Document> request = BatchSearchRequest.hybrid(
+    Arrays.asList("人工智能", "Java 框架"), 5
+);
+
+// 自定义权重
+BatchSearchRequest<Document> request = BatchSearchRequest.hybrid(
+    Arrays.asList("人工智能", "Java 框架"), 5, 0.6f, 0.4f
+);
+
+List<List<SearchResult<Document>>> results = vectorStore.batchSearch(request);
+```
+
+#### 与 `search()` 的对比
+
+| | `search()` 循环 N 次 | `batchSearch()` |
+|---|---|---|
+| RPC 次数 | N 次 | **1 次** |
+| 网络延迟 | N × 单次延迟 | 单次延迟 |
+| 适用场景 | 单个查询 | 多个独立查询同时发起 |
+| 返回类型 | `List<SearchResult<T>>` | `List<List<SearchResult<T>>>` |
+
+---
+
 ### 文本搜索（自动嵌入）
 
-需要配置 `EmbeddingModel`，可直接使用文本进行搜索：
 
 ```java
 // 创建带 EmbeddingModel 的 VectorStore
@@ -506,6 +606,9 @@ List<Document> query(String filterExpression);                    // 便捷方�
 // ====== 向量搜索（泛型 Request）======
 <T extends Document> List<SearchResult<T>> search(SearchRequest<T> request);
 
+// ====== 批量搜索（单次 RPC，多查询）======
+<T extends Document> List<List<SearchResult<T>>> batchSearch(BatchSearchRequest<T> request);
+
 // ====== 分区管理 ======
 void createPartition(String partitionName);
 void dropPartition(String partitionName);
@@ -580,6 +683,41 @@ SearchRequest<DocumentSegment> request = SearchRequest.<DocumentSegment>builder(
     .build();
 ```
 
+### BatchSearchRequest\<T\>
+
+`BatchSearchRequest<T>` 继承自 `BaseSearchRequest<T>`，与 `SearchRequest<T>` 共享所有基础参数（`topK`、`filter`、`partitionNames`、`searchType`、权重等），区别在于将单个查询换成了**列表**。
+
+```java
+// 静态工厂方法
+BatchSearchRequest.ofQueries(List<String> queries, int topK);          // 多文本向量搜索
+BatchSearchRequest.ofVectors(List<List<Float>> vectors, int topK);     // 多预计算向量搜索
+BatchSearchRequest.bm25(List<String> queries, int topK);               // 多文本 BM25
+BatchSearchRequest.hybrid(List<String> queries, int topK);             // 多文本混合（默认各 50%）
+BatchSearchRequest.hybrid(List<String> queries, int topK, float vectorWeight, float bm25Weight);
+BatchSearchRequest.<T>builder();                                        // Builder
+
+// Builder 方法（继承 BaseSearchRequest 的所有字段）
+BatchSearchRequest<DocumentSegment> request = BatchSearchRequest.<DocumentSegment>builder()
+    .queries(Arrays.asList("查询1", "查询2"))   // 多个文本（与 vectors 二选一）
+    .vectors(List.of(vec1, vec2))               // 多个预计算向量（与 queries 二选一）
+    .searchType(SearchType.VECTOR)              // 搜索类型: VECTOR/BM25/HYBRID
+    .vectorFieldName("embedding")              // 向量字段名，默认 "embedding"
+    .sparseVectorFieldName("sparse")           // 稀疏向量字段名，默认 "sparse"
+    .vectorWeight(0.7f)                        // 混合搜索：向量权重，默认 0.5
+    .bm25Weight(0.3f)                          // 混合搜索：BM25 权重，默认 0.5
+    .topK(10)                                  // 返回数量，默认 10
+    .filter("field == 'value'")                // 过滤表达式（可选）
+    .inPartition("partition1")                 // @Singular: 添加分区
+    .partitionNames(List.of("p1", "p2"))       // 或直接设置列表
+    .similarityThreshold(0.7f)                 // 相似度阈值，默认 0.0
+    .documentClass(DocumentSegment.class)      // 指定返回类型 ⭐
+    .build();
+
+// 调用
+List<List<SearchResult<DocumentSegment>>> results = vectorStore.batchSearch(request);
+// results.get(i) 对应第 i 个输入查询的搜索结果
+```
+
 ### SearchType 枚举
 
 ```java
@@ -619,6 +757,18 @@ List<SearchResult<Document>> bm25Results = vectorStore.search(bm25Req);
 // 混合搜索（向量 70% + BM25 30%）
 SearchRequest<Document> hybridReq = SearchRequest.hybrid("深度学习技术", 10, 0.7f, 0.3f);
 List<SearchResult<Document>> hybridResults = vectorStore.search(hybridReq);
+
+// 批量搜索（多查询单次 RPC）
+List<List<SearchResult<DocumentSegment>>> batchResults = vectorStore.batchSearch(
+    BatchSearchRequest.<DocumentSegment>builder()
+        .queries(Arrays.asList("Java 编程", "人工智能", "Spring Boot"))
+        .topK(5)
+        .documentClass(DocumentSegment.class)
+        .build()
+);
+batchResults.forEach((groupResults) ->
+    groupResults.forEach(r -> System.out.println(r.getDocument().getId() + ": " + r.getScore()))
+);
 ```
 
 ### MilvusClient 接口
